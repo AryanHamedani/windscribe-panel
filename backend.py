@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""JSON adapter between the panel and windscribe-cli.
+
+Every call prints one JSON object: {"ok": true, ...} or {"ok": false, "error": "..."}.
+It runs unprivileged, only ever calls windscribe-cli with fixed arguments, and
+edits windscribe_cli.conf atomically under the same lock as the range refresher.
+
+    backend.py status | catalog | connect [best|<nickname>] | disconnect
+    backend.py set <Key> <value> | domain add|remove <hostname> | refresh-ranges [CC]
+"""
+import configparser
+import fcntl
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+CONFIG = Path(os.environ.get('WINDSCRIBE_CONFIG', Path.home() / '.config/Windscribe/windscribe_cli.conf'))
+STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'omarchy-windscribe/country-ranges.json'
+CLI = os.environ.get('WINDSCRIBE_CLI', 'windscribe-cli')
+REFRESHER = HERE / 'bin/windscribe-split-refresh'
+CONFIG_LOCK = CONFIG.parent / '.omarchy-windscribe.lock'
+CLI_LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'omarchy-windscribe-cli.lock'
+
+BOOLS = {'Autoconnect', 'AllowLANTraffic', 'CircumventCensorship', 'SplitTunnelingEnabled'}
+PROTOCOLS = ['WireGuard', 'Stealth', 'WStunnel', 'UDP', 'TCP']
+READ_KEYS = BOOLS | {'AmneziawgPreset', 'ConnectionMode', 'ManualConnectionProtocol', 'ManualConnectionPort',
+                     'ConnectedDNSMode', 'FirewallMode', 'SplitTunnelingMode'}
+MAX_HOSTNAMES = 50
+ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+
+def cli(*args, timeout=10):
+    # The CLI talks to one daemon; concurrent calls from a poll and a click garble each other.
+    with CLI_LOCK.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            proc = subprocess.run([CLI, *args], capture_output=True, text=True, timeout=timeout)
+        except FileNotFoundError:
+            raise RuntimeError('windscribe-cli is not installed. See the plugin README.') from None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('Windscribe did not answer in %ds. Is windscribe.service running?' % timeout) from None
+    out = ANSI.sub('', proc.stdout).strip()
+    if proc.returncode:
+        raise RuntimeError((out or ANSI.sub('', proc.stderr).strip() or 'windscribe-cli failed')[:400])
+    return out
+
+
+def parse_status(text):
+    fields = {}
+    for line in text.splitlines():
+        if ': ' in line:
+            key, value = line.lstrip('* ').split(': ', 1)
+            fields[key.strip()] = value.strip()
+    connection = fields.get('Connect state', '')
+    firewall = fields.get('Firewall state', 'Unknown')
+    lowered = connection.lower()
+    if fields.get('Login state', '').lower().startswith('logged out'):
+        state = 'signedOut'
+    elif connection.startswith('Connected'):
+        # A leading star marks a tunnel that is up but still being verified.
+        state = 'testing' if re.search(r'^\*\s*Connect state', text, re.MULTILINE) else 'connected'
+    elif any(word in lowered for word in ('connecting', 'reconnecting', 'disconnecting')):
+        state = 'connecting'
+    elif connection.startswith('Disconnected'):
+        state = 'blocked' if firewall in ('On', 'Always On') else 'disconnected'
+    else:
+        state = 'unknown'
+    location = connection.split(':', 1)[1].strip() if state in ('connected', 'testing') and ':' in connection else ''
+    city, _, nickname = location.partition(' - ')
+    return {
+        'state': state,
+        'location': location,
+        'city': city,
+        'nickname': nickname,
+        'firewall': firewall,
+        'ip': fields.get('VPN IP', ''),
+        'protocol': fields.get('Protocol', ''),
+        'login': fields.get('Login state', ''),
+        'internet': fields.get('Internet connectivity', ''),
+        'usage': fields.get('Data usage', ''),
+    }
+
+
+def parse_locations(text):
+    """`Region - City - Nickname (10 Gbps)` rows; the nickname is what `connect` takes."""
+    result = []
+    for line in text.splitlines():
+        line = line.strip()
+        speed = re.search(r'\(([^)]*)\)\s*$', line)
+        label = line[:speed.start()].strip() if speed else line
+        parts = [p.strip() for p in label.split(' - ')]
+        if len(parts) < 3:
+            continue
+        result.append({'id': parts[-1], 'city': parts[-2], 'region': ' - '.join(parts[:-2]),
+                       'speed': speed.group(1) if speed else ''})
+    result.sort(key=lambda row: (row['region'], row['city'], row['id']))
+    return result
+
+
+def hostname(value):
+    value = value.strip().lower().rstrip('.')
+    if value.startswith(('http://', 'https://')):
+        raise ValueError('Enter just the hostname, without http:// or a path.')
+    if not value or any(c.isspace() or c in '/:*' for c in value):
+        raise ValueError('Enter a hostname like app.example.ir. Wildcards and paths are not supported.')
+    if is_network(value):
+        raise ValueError('That is an IP address. Country ranges are managed for you.')
+    try:
+        value = value.encode('idna').decode('ascii')
+    except UnicodeError:
+        raise ValueError('That hostname is not valid.') from None
+    labels = value.split('.')
+    if len(value) > 253 or len(labels) < 2 or not all(
+            re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in labels):
+        raise ValueError('Enter a hostname like app.example.ir.')
+    return value
+
+
+def is_network(value):
+    try:
+        ipaddress.ip_network(value)
+        return True
+    except ValueError:
+        return False
+
+
+def change_domains(routes, action, value):
+    value = hostname(value)
+    if action == 'remove':
+        return [r for r in routes if r != value]
+    if action != 'add':
+        raise ValueError('Unknown hostname action')
+    if value in routes:
+        return routes
+    if sum(not is_network(r) for r in routes) >= MAX_HOSTNAMES:
+        raise ValueError('Windscribe allows %d hostnames. Remove one first.' % MAX_HOSTNAMES)
+    return routes + [value]
+
+
+def setting_changes(key, value):
+    if key in BOOLS and value in ('true', 'false'):
+        return {key: value}
+    if key == 'SplitTunnelingMode' and value in ('Exclude', 'Include'):
+        return {key: value}
+    if key == 'ConnectionMode' and value == 'Auto':
+        return {'ConnectionMode': 'Auto'}
+    if key == 'ManualConnectionProtocol' and value in PROTOCOLS:
+        # 443 is open for every Windscribe protocol, and the least likely to be filtered.
+        return {'ConnectionMode': 'Manual', key: value, 'ManualConnectionPort': '443'}
+    raise ValueError('Unsupported setting: %s=%s' % (key, value))
+
+
+def read_preferences(text):
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    parser.read_string(text)
+    if not parser.has_section('Connection'):
+        raise ValueError('The Windscribe config has no [Connection] section. Run windscribe-cli once first.')
+    section = parser['Connection']
+    routes = [s.strip() for s in section.get('SplitTunnelingRoutes', '').split(',') if s.strip()]
+    prefs: dict = {key: section.get(key, '') for key in READ_KEYS}
+    prefs['domains'] = [r for r in routes if not is_network(r)]
+    prefs['rangeCount'] = len(routes) - len(prefs['domains'])
+    return prefs, routes
+
+
+def edit_ini(text, changes):
+    """Rewrite keys inside [Connection] in place, keeping every other byte as it was."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if line.strip() == '[Connection]'), None)
+    if start is None:
+        raise ValueError('The Windscribe config has no [Connection] section')
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith('[')), len(lines))
+    pending = dict(changes)
+    for i in range(start + 1, end):
+        key = lines[i].split('=', 1)[0].strip()
+        if key in pending:
+            lines[i] = key + '=' + pending.pop(key) + '\n'
+    if pending:
+        if end and not lines[end - 1].endswith('\n'):
+            lines[end - 1] += '\n'
+        lines[end:end] = [key + '=' + value + '\n' for key, value in pending.items()]
+    return ''.join(lines)
+
+
+def mutate(make_changes):
+    with CONFIG_LOCK.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        original = CONFIG.read_text()
+        prefs, routes = read_preferences(original)
+        changed = edit_ini(original, make_changes(prefs, routes))
+        if changed == original:
+            return
+        fd, name = tempfile.mkstemp(prefix='.windscribe-panel-', dir=CONFIG.parent)
+        try:
+            with os.fdopen(fd, 'w') as stream:
+                stream.write(changed)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(name, CONFIG.stat().st_mode & 0o777)
+            os.replace(name, CONFIG)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+
+
+def bypass_state():
+    try:
+        state = json.loads(STATE.read_text())
+        return {'country': state.get('country', ''), 'updated': state.get('updated', '')}
+    except (OSError, ValueError):
+        return {'country': '', 'updated': ''}
+
+
+def dispatch(args):
+    if args == ['status']:
+        prefs, _ = read_preferences(CONFIG.read_text())
+        return {'status': parse_status(cli('status')), 'settings': prefs, 'bypass': bypass_state()}
+    if args == ['catalog']:
+        return {'locations': parse_locations(cli('locations')),
+                'presets': [p for p in cli('amneziawg').splitlines() if p.strip()]}
+    if args == ['connect']:
+        cli('connect', '-n')
+        return {'message': 'Connecting to your last location…'}
+    if len(args) == 2 and args[0] == 'connect':
+        target = args[1]
+        if target != 'best' and target not in {r['id'] for r in parse_locations(cli('locations'))}:
+            raise ValueError('Choose a location from the current Windscribe list.')
+        cli('connect', '-n', target)
+        return {'message': 'Connecting to %s…' % ('the best location' if target == 'best' else target)}
+    if args == ['disconnect']:
+        cli('disconnect', '-n')
+        return {'message': 'Disconnected.'}
+    if len(args) == 3 and args[0] == 'set':
+        changes = setting_changes(args[1], args[2])
+        mutate(lambda p, r: changes)
+        return {'message': 'Saved.'}
+    if len(args) == 2 and args[0] == 'preset':
+        if args[1] not in cli('amneziawg').splitlines():
+            raise ValueError('Choose one of the listed censorship presets.')
+        mutate(lambda p, r: {'AmneziawgPreset': args[1]})
+        return {'message': 'Preset saved.'}
+    if len(args) == 3 and args[0] == 'domain':
+        mutate(lambda p, r: {'SplitTunnelingRoutes': ', '.join(change_domains(r, args[1], args[2]))})
+        return {'message': ('Added ' if args[1] == 'add' else 'Removed ') + hostname(args[2]) + '.'}
+    if args and args[0] == 'refresh-ranges' and len(args) <= 2:
+        proc = subprocess.run([sys.executable, str(REFRESHER), *args[1:]], capture_output=True, text=True, timeout=90)
+        if proc.returncode:
+            raise RuntimeError((proc.stderr or proc.stdout).strip()[-400:])
+        return {'message': proc.stdout.strip()}
+    raise ValueError('Unknown operation: ' + ' '.join(args))
+
+
+def main():
+    try:
+        print(json.dumps({'ok': True, **dispatch(sys.argv[1:])}))
+    except Exception as error:
+        print(json.dumps({'ok': False, 'error': str(error)[:400]}))
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()

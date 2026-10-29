@@ -1,0 +1,93 @@
+#!/bin/bash
+
+# Set Windscribe up for the Omarchy panel, or take the setup back out.
+#
+#   bin/setup              # bypass Iran (IR)
+#   bin/setup DE           # bypass another country
+#   bin/setup --uninstall  # remove the weekly refresh; Windscribe is left as it is
+#
+# Safe to run again: every step checks before it changes anything.
+
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+NAME=omarchy-windscribe-refresh
+CONFIG="$HOME/.config/Windscribe/windscribe_cli.conf"
+
+step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+if [[ ${1:-} == --uninstall ]]; then
+  step "Removing the weekly range refresh"
+  systemctl --user disable --now "$NAME.timer" 2>/dev/null || true
+  rm -f "$UNITS/$NAME.service" "$UNITS/$NAME.timer"
+  systemctl --user daemon-reload
+  note "Done. Your Windscribe settings and route list were not changed."
+  exit 0
+fi
+
+country=$(tr '[:lower:]' '[:upper:]' <<<"${1:-IR}")
+[[ $country =~ ^[A-Z]{2}$ ]] || die "country must be a two-letter ISO code, like IR"
+
+step "Checking windscribe-cli"
+if ! command -v windscribe-cli >/dev/null; then
+  note "windscribe-cli is not installed. Get the Arch package from"
+  note "https://windscribe.com/download (Linux > Arch > CLI), then:"
+  note "  sudo pacman -U ~/Downloads/windscribe-cli_*.pkg.tar.zst"
+  exit 1
+fi
+note "$(windscribe-cli --help 2>/dev/null | head -1)"
+
+step "Starting the Windscribe service"
+systemctl --user enable --now windscribe.service >/dev/null 2>&1 || note "windscribe.service could not be started; is the helper installed?"
+for _ in {1..10}; do [[ -f $CONFIG ]] && break; sleep 1; done
+[[ -f $CONFIG ]] || die "$CONFIG did not appear. Run windscribe-cli status once, then try again."
+
+if windscribe-cli status 2>/dev/null | grep -q 'Logged out'; then
+  step "Signing in"
+  windscribe-cli login
+fi
+
+step "Turning split tunneling on, in Exclude mode"
+python3 "$HERE/backend.py" set SplitTunnelingMode Exclude >/dev/null
+python3 "$HERE/backend.py" set SplitTunnelingEnabled true >/dev/null
+
+step "Fetching $country's network ranges"
+python3 "$HERE/bin/windscribe-split-refresh" "$country"
+
+step "Installing a weekly refresh ($NAME.timer)"
+mkdir -p "$UNITS"
+cat >"$UNITS/$NAME.service" <<UNIT
+[Unit]
+Description=Refresh $country network ranges in the Windscribe split tunnel
+After=network-online.target windscribe.service
+ConditionPathExists=$CONFIG
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 $HERE/bin/windscribe-split-refresh $country
+TimeoutStartSec=120
+UMask=0077
+UNIT
+cat >"$UNITS/$NAME.timer" <<UNIT
+[Unit]
+Description=Weekly refresh of $country ranges for the Windscribe split tunnel
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl --user daemon-reload
+systemctl --user enable --now "$NAME.timer" >/dev/null
+note "Next run: $(systemctl --user show "$NAME.timer" -p NextElapseUSecRealtime --value)"
+
+if [[ $country != IR ]]; then
+  note "Tell the panel too: add \"bypassCountry\": \"$country\" to its entry in ~/.config/omarchy/shell.json"
+fi
+step "Done"
