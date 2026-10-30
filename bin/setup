@@ -89,7 +89,12 @@ for _ in {1..10}; do [[ -f $CONFIG ]] && break; sleep 1; done
 
 if windscribe-cli status 2>/dev/null | grep 'Logged out' >/dev/null; then
   step "Signing in"
-  windscribe-cli login
+  # Under `curl … | bash` stdin is the script, so the prompt reads the terminal.
+  if [[ -r /dev/tty ]]; then
+    windscribe-cli login </dev/tty
+  else
+    note "No terminal to sign in from: run windscribe-cli login, then this again"
+  fi
 fi
 
 step "Turning split tunneling on, in Exclude mode"

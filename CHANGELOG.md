@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.2 (2026-10-30)
+
+- Fixed: signing in from the `curl … | bash` installer read the script
+  instead of the keyboard; the prompt now reads the terminal.
+
 ## 1.1.1 (2026-10-30)
 
 - Fixed: a dependency check piped into `grep -q` could misfire under
