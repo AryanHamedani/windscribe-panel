@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 (2026-10-30)
+
+- Fixed: a dependency check piped into `grep -q` could misfire under
+  `pipefail` and redo work that was already done.
+
 ## 1.1.0 (2026-10-30)
 
 - Locations show ping, link speed and load, sorted fastest first; a toggle

@@ -87,7 +87,7 @@ systemctl --user enable --now windscribe.service >/dev/null 2>&1 || note "windsc
 for _ in {1..10}; do [[ -f $CONFIG ]] && break; sleep 1; done
 [[ -f $CONFIG ]] || die "$CONFIG did not appear. Run windscribe-cli status once, then try again."
 
-if windscribe-cli status 2>/dev/null | grep -q 'Logged out'; then
+if windscribe-cli status 2>/dev/null | grep 'Logged out' >/dev/null; then
   step "Signing in"
   windscribe-cli login
 fi
