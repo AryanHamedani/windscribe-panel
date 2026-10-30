@@ -25,15 +25,16 @@ import urllib.request
 
 HERE = Path(__file__).resolve().parent
 CONFIG = Path(os.environ.get('WINDSCRIBE_CONFIG', Path.home() / '.config/Windscribe/windscribe_cli.conf'))
-STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'omarchy-windscribe/country-ranges.json'
+STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'windscribe-panel/country-ranges.json'
 CLI = os.environ.get('WINDSCRIBE_CLI', 'windscribe-cli')
 REFRESHER = HERE / 'bin/windscribe-split-refresh'
+LEGACY_STATE = STATE.parent.parent / 'omarchy-windscribe/country-ranges.json'
 STATE_DIR = STATE.parent
 SERVERLIST_URL = 'https://assets.windscribe.com/serverlist/mob-v2/1/1'
 SERVERLIST_TTL = 6 * 3600
 PING_TTL = 15 * 60
-CONFIG_LOCK = CONFIG.parent / '.omarchy-windscribe.lock'
-CLI_LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'omarchy-windscribe-cli.lock'
+CONFIG_LOCK = CONFIG.parent / '.windscribe-panel.lock'
+CLI_LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'windscribe-panel-cli.lock'
 
 BOOLS = {'Autoconnect', 'AllowLANTraffic', 'CircumventCensorship', 'SplitTunnelingEnabled'}
 PROTOCOLS = ['WireGuard', 'Stealth', 'WStunnel', 'UDP', 'TCP']
@@ -309,11 +310,13 @@ def mutate(make_changes):
 
 
 def bypass_state():
-    try:
-        state = json.loads(STATE.read_text())
-        return {'country': state.get('country', ''), 'updated': state.get('updated', '')}
-    except (OSError, ValueError):
-        return {'country': '', 'updated': ''}
+    for path in (STATE, LEGACY_STATE):
+        try:
+            state = json.loads(path.read_text())
+            return {'country': state.get('country', ''), 'updated': state.get('updated', '')}
+        except (OSError, ValueError):
+            continue
+    return {'country': '', 'updated': ''}
 
 
 def dispatch(args):

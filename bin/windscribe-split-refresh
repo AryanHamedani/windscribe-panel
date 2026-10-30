@@ -23,8 +23,10 @@ import tempfile
 import urllib.request
 
 CONFIG = Path(os.environ.get('WINDSCRIBE_CONFIG', Path.home() / '.config/Windscribe/windscribe_cli.conf'))
-STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'omarchy-windscribe/country-ranges.json'
-LOCK = CONFIG.parent / '.omarchy-windscribe.lock'
+STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'windscribe-panel/country-ranges.json'
+# Where 1.1 and earlier kept it, read until the next refresh writes the new one.
+LEGACY_STATE = STATE.parent.parent / 'omarchy-windscribe/country-ranges.json'
+LOCK = CONFIG.parent / '.windscribe-panel.lock'
 URL = 'https://stat.ripe.net/data/country-resource-list/data.json?resource={}&v4_format=prefix'
 # Windscribe 2.24 refuses route lists past this size.
 ROUTE_CAPACITY = 4096
@@ -104,10 +106,12 @@ def atomic_write(path, content, mode=0o600):
 
 
 def load_state():
-    try:
-        return json.loads(STATE.read_text())
-    except (OSError, ValueError):
-        return {}
+    for path in (STATE, LEGACY_STATE):
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def fetch(country):

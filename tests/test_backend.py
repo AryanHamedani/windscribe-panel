@@ -207,6 +207,18 @@ class Refresher(unittest.TestCase):
         # No record of the last list: every range is treated as ours.
         self.assertEqual(refresher.merge_routes(current, ['5.22.0.0/17'], None), ['5.22.0.0/17', 'snapp.ir'])
 
+    def test_legacy_state_is_read(self):
+        # State written by 1.1 under the old folder name still marks which ranges are ours.
+        with tempfile.TemporaryDirectory() as tmp:
+            new, old = Path(tmp) / 'windscribe-panel/s.json', Path(tmp) / 'omarchy-windscribe/s.json'
+            old.parent.mkdir()
+            old.write_text(json.dumps({'country': 'IR', 'ranges': ['2.144.0.0/14']}))
+            with mock.patch.multiple(refresher, STATE=new, LEGACY_STATE=old):
+                self.assertEqual(refresher.load_state()['ranges'], ['2.144.0.0/14'])
+                new.parent.mkdir()
+                new.write_text(json.dumps({'ranges': ['5.22.0.0/17']}))
+                self.assertEqual(refresher.load_state()['ranges'], ['5.22.0.0/17'])
+
     def test_write_routes_touches_one_line(self):
         out = refresher.write_routes(CONFIG, ['5.22.0.0/17', 'snapp.ir'])
         self.assertEqual(refresher.read_routes(out), ['5.22.0.0/17', 'snapp.ir'])

@@ -1,6 +1,6 @@
-# Windscribe for Omarchy
+# Windscribe Panel
 
-[![test](https://github.com/AryanHamedani/omarchy-windscribe/actions/workflows/test.yml/badge.svg)](https://github.com/AryanHamedani/omarchy-windscribe/actions/workflows/test.yml)
+[![test](https://github.com/AryanHamedani/windscribe-panel/actions/workflows/test.yml/badge.svg)](https://github.com/AryanHamedani/windscribe-panel/actions/workflows/test.yml)
 
 Windscribe VPN in the [Omarchy](https://omarchy.org) bar. One icon tells you
 whether you are protected; one click gets you a location, the connection
@@ -35,7 +35,7 @@ own, no root, no network access except the weekly RIPEstat fetch.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AryanHamedani/omarchy-windscribe/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AryanHamedani/windscribe-panel/main/install.sh | bash
 ```
 
 That one command, safe to run again at any time (it is also how you update):
@@ -48,7 +48,7 @@ That one command, safe to run again at any time (it is also how you update):
 3. starts Windscribe's services and signs you in if needed,
 4. turns split tunneling on, in Exclude mode,
 5. fetches Iran's ranges (`… | bash -s -- DE` for another country),
-6. installs `omarchy-windscribe-refresh.timer` to refresh them weekly.
+6. installs `windscribe-split-refresh.timer` to refresh them weekly.
 
 It asks for your password for `pacman` and Windscribe's sign-in, nothing else.
 Upgrade the CLI later with `bin/setup --update-cli`.
@@ -61,7 +61,7 @@ like the stock panels, and it runs only inside that shell, not on Hyprland
 by itself. The backend (`backend.py`, `bin/windscribe-split-refresh`) is plain
 Python over `windscribe-cli` and works on any Linux.
 
-Prefer to do it by hand? `omarchy plugin add https://github.com/AryanHamedani/omarchy-windscribe --enable`,
+Prefer to do it by hand? `omarchy plugin add https://github.com/AryanHamedani/windscribe-panel --enable`,
 then run `bin/setup` from the plugin folder.
 
 ## Use
@@ -132,14 +132,14 @@ What it keeps:
 
 - Hostnames you added, in the panel or by hand.
 - IP ranges you added by hand. It remembers which ranges it wrote last
-  (`~/.local/state/omarchy-windscribe/country-ranges.json`) and only replaces
+  (`~/.local/state/windscribe-panel/country-ranges.json`) and only replaces
   those.
 - Every other line of the config, byte for byte. A copy of the previous file
   is left at `windscribe_cli.conf.bak`.
 
 ```bash
 bin/windscribe-split-refresh --dry-run   # fetch and check, write nothing
-journalctl --user -u omarchy-windscribe-refresh   # what the timer did
+journalctl --user -u windscribe-split-refresh   # what the timer did
 ```
 
 **DNS is separate.** Windscribe's R.O.B.E.R.T. filters DNS for every site,
@@ -188,7 +188,7 @@ Hack on a clone in place of the installed copy; the shell reloads a plugin
 when its files change:
 
 ```bash
-git clone https://github.com/AryanHamedani/omarchy-windscribe ~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe
+git clone https://github.com/AryanHamedani/windscribe-panel ~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe
 python3 -m unittest discover -s tests       # tests
 python3 backend.py status | jq              # what the panel sees
 omarchy shell io.github.aryanhamedani.windscribe inspect

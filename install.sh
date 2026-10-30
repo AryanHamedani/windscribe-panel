@@ -2,7 +2,7 @@
 
 # Install or update Windscribe for the Omarchy bar, dependencies included.
 #
-#   curl -fsSL https://raw.githubusercontent.com/AryanHamedani/omarchy-windscribe/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/AryanHamedani/windscribe-panel/main/install.sh | bash
 #   bash install.sh DE        # bypass another country instead of Iran
 #
 # Safe to run again: it updates the plugin and fixes whatever is missing.
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 ID=io.github.aryanhamedani.windscribe
-REPO=https://github.com/AryanHamedani/omarchy-windscribe
+REPO=https://github.com/AryanHamedani/windscribe-panel
 DIR="$HOME/.config/omarchy/plugins/$ID"
 
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }

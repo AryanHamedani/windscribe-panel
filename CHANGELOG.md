@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 (2026-10-30)
+
+- The repository is now `AryanHamedani/windscribe-panel` (the old address
+  redirects). The refresh timer is `windscribe-split-refresh.timer` and its
+  state lives in `~/.local/state/windscribe-panel/`; `bin/setup` removes the
+  old timer, and state saved by 1.1 is still read until the next refresh.
+
 ## 1.1.2 (2026-10-30)
 
 - Fixed: signing in from the `curl … | bash` installer read the script

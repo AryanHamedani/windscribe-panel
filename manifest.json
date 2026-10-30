@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.aryanhamedani.windscribe",
   "name": "Windscribe",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "author": "Aryan Hamedani",
   "license": "MIT",
-  "homepage": "https://github.com/AryanHamedani/omarchy-windscribe",
+  "homepage": "https://github.com/AryanHamedani/windscribe-panel",
   "description": "Windscribe VPN in the Omarchy bar: status, locations, censorship settings and country split tunneling",
   "kinds": [
     "bar-widget"
