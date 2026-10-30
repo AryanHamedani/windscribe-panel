@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1 (2026-10-30)
+
+- Security: the windscribe-cli lock no longer falls back to a world-writable
+  `/tmp` when `XDG_RUNTIME_DIR` is unset, where another user could plant a
+  symlink; it uses the private state folder instead.
+
 ## 2.0.0 (2026-10-30)
 
 Windscribe Panel is no longer tied to one desktop.

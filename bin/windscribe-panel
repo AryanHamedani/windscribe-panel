@@ -46,7 +46,9 @@ SERVERLIST_URL = 'https://assets.windscribe.com/serverlist/mob-v2/1/1'
 SERVERLIST_TTL = 6 * 3600
 PING_TTL = 15 * 60
 CONFIG_LOCK = CONFIG.parent / '.windscribe-panel.lock'
-CLI_LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'windscribe-panel-cli.lock'
+# XDG_RUNTIME_DIR, else our own state folder: never a world-writable /tmp,
+# where another user could plant a symlink for the lock to write through.
+CLI_LOCK = (Path(os.environ['XDG_RUNTIME_DIR']) if os.path.isdir(os.environ.get('XDG_RUNTIME_DIR', '')) else STATE.parent) / 'windscribe-panel-cli.lock'
 
 BOOLS = {'Autoconnect', 'AllowLANTraffic', 'CircumventCensorship', 'SplitTunnelingEnabled'}
 PROTOCOLS = ['WireGuard', 'Stealth', 'WStunnel', 'UDP', 'TCP']
@@ -58,6 +60,7 @@ ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
 def cli(*args, timeout=10):
     # The CLI talks to one daemon; concurrent calls from a poll and a click garble each other.
+    CLI_LOCK.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with CLI_LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
