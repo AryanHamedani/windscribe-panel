@@ -1,0 +1,23 @@
+/* Windscribe for Waybar. @import this from your Waybar style.css. Colors
+   fall back to sensible defaults; override them in your own theme. */
+#custom-windscribe {
+  padding: 0 8px;
+}
+
+#custom-windscribe.off,
+#custom-windscribe.signedOut,
+#custom-windscribe.unknown {
+  opacity: 0.55;
+}
+
+#custom-windscribe.connecting {
+  animation: windscribe-pulse 1.2s ease-in-out infinite alternate;
+}
+
+#custom-windscribe.unprotected {
+  color: #f7768e;
+}
+
+@keyframes windscribe-pulse {
+  to { opacity: 0.35; }
+}

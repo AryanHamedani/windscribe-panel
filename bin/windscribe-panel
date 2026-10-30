@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""JSON adapter between the panel and windscribe-cli.
+"""Windscribe for the desktop bar: the one program every front end runs.
 
-Every call prints one JSON object: {"ok": true, ...} or {"ok": false, "error": "..."}.
+For a bar (Waybar or any bar that takes a JSON custom module):
+
+    windscribe-panel waybar     status, icon state and tooltip as one JSON line
+    windscribe-panel menu       pick a location, fastest first, in your launcher
+    windscribe-panel settings   protocol, censorship, LAN, split tunneling
+    windscribe-panel toggle     connect, or disconnect after asking
+
+For a panel that draws its own UI (the Omarchy shell front end), a JSON API.
+Every call prints {"ok": true, ...} or {"ok": false, "error": "..."}:
+
+    status | catalog | pings [--force] | connect [best|<nickname>] | disconnect
+    set <Key> <value> | preset <name> | domain add|remove <hostname> | refresh-ranges [CC]
+
 It runs unprivileged, only ever calls windscribe-cli with fixed arguments, and
 edits windscribe_cli.conf atomically under the same lock as the range refresher.
-
-    backend.py status | catalog | connect [best|<nickname>] | disconnect
-    backend.py set <Key> <value> | domain add|remove <hostname> | refresh-ranges [CC]
 """
 from concurrent.futures import ThreadPoolExecutor
 import configparser
+import html
 from datetime import datetime, timezone
 import fcntl
 import ipaddress
@@ -17,13 +27,15 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent.parent
 CONFIG = Path(os.environ.get('WINDSCRIBE_CONFIG', Path.home() / '.config/Windscribe/windscribe_cli.conf'))
 STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'windscribe-panel/country-ranges.json'
 CLI = os.environ.get('WINDSCRIBE_CLI', 'windscribe-cli')
@@ -51,7 +63,7 @@ def cli(*args, timeout=10):
         try:
             proc = subprocess.run([CLI, *args], capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
-            raise RuntimeError('windscribe-cli is not installed. See the plugin README.') from None
+            raise RuntimeError('windscribe-cli is not installed. Run bin/setup, or see the README.') from None
         except subprocess.TimeoutExpired:
             raise RuntimeError('Windscribe did not answer in %ds. Is windscribe.service running?' % timeout) from None
     out = ANSI.sub('', proc.stdout).strip()
@@ -255,6 +267,13 @@ def setting_changes(key, value):
     raise ValueError('Unsupported setting: %s=%s' % (key, value))
 
 
+def read_config():
+    try:
+        return CONFIG.read_text()
+    except FileNotFoundError:
+        raise RuntimeError('No Windscribe settings yet: run windscribe-cli status once (or bin/setup).') from None
+
+
 def read_preferences(text):
     parser = configparser.ConfigParser(interpolation=None, strict=False)
     parser.optionxform = str
@@ -291,7 +310,7 @@ def edit_ini(text, changes):
 def mutate(make_changes):
     with CONFIG_LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        original = CONFIG.read_text()
+        original = read_config()
         prefs, routes = read_preferences(original)
         changed = edit_ini(original, make_changes(prefs, routes))
         if changed == original:
@@ -321,7 +340,7 @@ def bypass_state():
 
 def dispatch(args):
     if args == ['status']:
-        prefs, _ = read_preferences(CONFIG.read_text())
+        prefs, _ = read_preferences(read_config())
         return {'status': parse_status(cli('status')), 'settings': prefs, 'bypass': bypass_state()}
     if args == ['catalog']:
         locations = parse_locations(cli('locations'))
@@ -366,9 +385,202 @@ def dispatch(args):
     raise ValueError('Unknown operation: ' + ' '.join(args))
 
 
-def main():
+# ---- Bar and launcher front end. Menus go through whichever dmenu-style
+#      launcher is installed, so the same commands work under any compositor.
+
+SIGNAL = int(os.environ.get('WINDSCRIBE_PANEL_SIGNAL', '8'))
+LAUNCHERS = [
+    ['fuzzel', '--dmenu', '--width', '66', '--lines', '15', '--prompt'],
+    ['wofi', '--dmenu', '--prompt'],
+    ['rofi', '-dmenu', '-i', '-p'],
+    ['tofi', '--require-match=false', '--prompt-text'],
+    ['bemenu', '-i', '-p'],
+]
+LABELS = {
+    'connected': 'Connected', 'connecting': 'Connecting…', 'off': 'Off, traffic blocked by the firewall',
+    'unprotected': 'Off, traffic is NOT protected', 'signedOut': 'Signed out', 'unknown': 'Unavailable',
+}
+
+
+def bar_state(status):
+    """One name per look: connected, connecting, off, unprotected, signedOut, unknown."""
+    return {'testing': 'connecting', 'blocked': 'off', 'disconnected': 'unprotected'}.get(status['state'], status['state'])
+
+
+def waybar():
     try:
-        print(json.dumps({'ok': True, **dispatch(sys.argv[1:])}))
+        status = parse_status(cli('status'))
+        prefs, _ = read_preferences(read_config())
+    except Exception as error:
+        return {'text': '', 'alt': 'unknown', 'class': 'unknown',
+                'tooltip': '<b>Windscribe</b>\n' + html.escape(str(error))}
+    state = bar_state(status)
+    rows = [('Location', status['location']), ('VPN IP', status['ip']), ('Protocol', status['protocol']),
+            ('Firewall', status['firewall']), ('Data', status['usage'].split(' / ')[0])]
+    if prefs['SplitTunnelingEnabled'] == 'true':
+        bypass = bypass_state()
+        rows.append(('Bypass', '%s · %d ranges · %d hosts' % (bypass['country'] or '--', prefs['rangeCount'], len(prefs['domains']))))
+    lines = ['<b>Windscribe</b>  %s' % html.escape(LABELS[state])]
+    # The label column is monospace so the values line up in any tooltip font.
+    lines += ['<tt><span alpha="60%%">%-9s</span></tt> %s' % (k, html.escape(v)) for k, v in rows if v]
+    lines.append('<span alpha="60%">click: locations · right: settings · middle: on/off</span>')
+    return {'text': html.escape(status['city']) if state == 'connected' else '', 'alt': state, 'class': state,
+            'tooltip': '\n'.join(lines)}
+
+
+def notify(body, urgent=False):
+    if shutil.which('notify-send'):
+        subprocess.run(['notify-send', '-a', 'Windscribe', '-u', 'critical' if urgent else 'normal',
+                        'Windscribe', body], check=False)
+    else:
+        print(body, file=sys.stderr)
+
+
+def refresh_bar():
+    subprocess.run(['pkill', '-RTMIN+%d' % SIGNAL, 'waybar'], check=False, capture_output=True)
+
+
+def choose(prompt, entries):
+    """The line picked in the launcher, or None when dismissed."""
+    custom = os.environ.get('WINDSCRIBE_PANEL_MENU', '').strip()
+    if custom:
+        command = shlex.split(custom)
+        # A command ending in its prompt flag (rofi's -p, fuzzel's --prompt) gets the prompt.
+        if command[-1].startswith('-'):
+            command.append(prompt + ' ')
+    else:
+        found = next((l for l in LAUNCHERS if shutil.which(l[0])), None)
+        if not found:
+            raise RuntimeError('No menu launcher found: install fuzzel, wofi, rofi, tofi or bemenu, '
+                               'or set WINDSCRIBE_PANEL_MENU to a dmenu-style command.')
+        command = found + [prompt + ' ']
+    proc = subprocess.run(command, input='\n'.join(entries), capture_output=True, text=True)
+    # Exit 1 is how dmenu-style launchers report Escape; anything else is a fault.
+    if proc.returncode not in (0, 1):
+        raise RuntimeError('%s failed: %s' % (command[0], (proc.stderr or 'exit %d' % proc.returncode).strip()[:200]))
+    picked = proc.stdout.strip()
+    return picked if proc.returncode == 0 and picked else None
+
+
+def pick(prompt, actions):
+    """actions: [(label, callable)]; runs the chosen one."""
+    labels = [label for label, _ in actions]
+    picked = choose(prompt, labels)
+    if picked is None:
+        return None
+    # Launchers trim differently, and labels carry alignment padding.
+    for label, action in actions:
+        if label.strip() == picked.strip():
+            return action()
+    return None
+
+
+def act(args):
+    result = dispatch(args)
+    refresh_bar()
+    if result.get('message'):
+        notify(result['message'])
+
+
+def location_menu():
+    status = parse_status(cli('status'))
+    if not os.path.exists(STATE_DIR / 'pings.json'):
+        notify('Measuring ping to every location, a few seconds…')
+    try:
+        measured = pings()
+    except RuntimeError:  # server list unreachable: region order, no times
+        measured = {}
+    latency = measured.get('pings', {})
+    rows = dispatch(['catalog'])['locations']
+    rows.sort(key=lambda r: (latency.get(r['id']) is None, latency.get(r['id'], 0), r['region'], r['city']))
+    actions = [('      Best location', lambda: act(['connect', 'best']))]
+    for row in rows:
+        ms = latency.get(row['id'])
+        here = status['nickname'] == row['id'] and bar_state(status) == 'connected'
+        speed = '%dG' % (row['link'] // 1000) if row['link'] >= 1000 else ('%dM' % row['link'] if row['link'] else '')
+        detail = ' '.join(x for x in (speed, '' if row['load'] is None else '%s%%' % row['load']) if x)
+        label = '%s %6s  %-28s %-13s %s' % ('●' if here else ' ', '%d ms' % ms if ms is not None else '--',
+                                            row['city'] + ' · ' + row['id'], row['region'], detail)
+        actions.append((label, lambda r=row: act(['connect', r['id']])))
+    prompt = 'Location (pings via tunnel)' if measured.get('tunnel') else 'Location'
+    pick(prompt, actions)
+
+
+def toggle():
+    status = parse_status(cli('status'))
+    if status['state'] == 'signedOut':
+        return notify('Signed out. Run windscribe-cli login in a terminal.', urgent=True)
+    if bar_state(status) not in ('connected', 'connecting'):
+        return act(['connect'])
+    firewall = status['firewall'] in ('On', 'Always On')
+    warning = ('Disconnect: the firewall blocks the internet until you reconnect' if firewall
+               else 'Disconnect: traffic will go out WITHOUT the VPN')
+    pick('Disconnect?', [(warning, lambda: act(['disconnect'])), ('Stay connected', lambda: None)])
+
+
+def settings_menu():
+    prefs, _ = read_preferences(read_config())
+    status = parse_status(cli('status'))
+    on = lambda key: prefs.get(key) == 'true'
+    flip = lambda key: (lambda: act(['set', key, 'false' if on(key) else 'true']))
+    word = lambda key: 'on' if on(key) else 'off'
+    protocol = 'Auto' if prefs['ConnectionMode'] == 'Auto' else prefs['ManualConnectionProtocol']
+    country = os.environ.get('WINDSCRIBE_BYPASS_COUNTRY') or bypass_state()['country'] or 'IR'
+
+    def protocols():
+        options = [('Auto', lambda: act(['set', 'ConnectionMode', 'Auto']))]
+        options += [(p, lambda p=p: act(['set', 'ManualConnectionProtocol', p])) for p in PROTOCOLS]
+        pick('Protocol', options)
+
+    def presets():
+        names = [n for n in cli('amneziawg').splitlines() if n.strip()]
+        pick('AmneziaWG preset', [(n, lambda n=n: act(['preset', n])) for n in names])
+
+    def add_host():
+        name = choose('Hostname to bypass', [])
+        if name:
+            act(['domain', 'add', name])
+
+    def remove_host():
+        pick('Remove hostname', [(d, lambda d=d: act(['domain', 'remove', d])) for d in prefs['domains']])
+
+    tunnel = bar_state(status) in ('connected', 'connecting')
+    pick('Windscribe', [
+        ('Disconnect…' if tunnel else 'Connect to last location', toggle),
+        ('Protocol: %s ›' % protocol, protocols),
+        ('Auto-connect: %s' % word('Autoconnect'), flip('Autoconnect')),
+        ('Circumvent censorship: %s' % word('CircumventCensorship'), flip('CircumventCensorship')),
+        ('AmneziaWG preset: %s ›' % (prefs['AmneziawgPreset'] or 'none'), presets),
+        ('Allow LAN traffic: %s' % word('AllowLANTraffic'), flip('AllowLANTraffic')),
+        ('Split tunneling: %s (%s · %d ranges · %d hosts)' % (word('SplitTunnelingEnabled'), country,
+                                                             prefs['rangeCount'], len(prefs['domains'])),
+         flip('SplitTunnelingEnabled')),
+        ('Refresh %s ranges now' % country, lambda: (notify('Fetching %s ranges…' % country), act(['refresh-ranges', country]))),
+        ('Add a hostname to bypass…', add_host),
+        ('Remove a hostname ›', remove_host),
+    ])
+
+
+FRONT_END = {'menu': location_menu, 'settings': settings_menu, 'toggle': toggle}
+
+
+def main():
+    args = sys.argv[1:]
+    if args == ['waybar']:
+        print(json.dumps(waybar()))
+        return
+    if len(args) == 1 and args[0] in FRONT_END:
+        try:
+            FRONT_END[args[0]]()
+        except Exception as error:
+            notify(str(error)[:300], urgent=True)
+            sys.exit(1)
+        return
+    if not args or args[0] in ('-h', '--help', 'help'):
+        print(__doc__.strip())
+        return
+    try:
+        print(json.dumps({'ok': True, **dispatch(args)}))
     except Exception as error:
         print(json.dumps({'ok': False, 'error': str(error)[:400]}))
         sys.exit(1)

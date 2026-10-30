@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0.0 (2026-10-30)
+
+Windscribe Panel is no longer tied to one desktop.
+
+- **Waybar front end** for Hyprland, Sway, niri, river and other wlroots
+  compositors: a status icon per state, a tooltip with location, IP,
+  protocol, firewall, data and bypass, and menus for locations (fastest
+  first), settings and connect/disconnect, in fuzzel, wofi, rofi, tofi,
+  bemenu or any dmenu-style launcher (`WINDSCRIBE_PANEL_MENU`).
+- **One program**, `bin/windscribe-panel` (was `backend.py`), behind both
+  front ends; the Omarchy panel moved to `omarchy/`.
+- **Any distribution**: `bin/setup` installs dependencies and the official
+  `windscribe-cli` package with pacman, apt, dnf or zypper, for x86_64 and,
+  where Windscribe publishes it, aarch64.
+- `install.sh` picks the front end for your desktop (`--waybar` to choose).
+- The Omarchy panel refreshes the last country fetched by default, like the
+  menus, instead of always Iran.
+- Fixed: a launcher command ending in its prompt flag got no prompt, and
+  launcher failures were silently treated as a dismissed menu.
+
+Upgrading on Omarchy needs nothing: `install.sh` or `git pull` as before.
+
 ## 1.2.0 (2026-10-30)
 
 - The repository is now `AryanHamedani/windscribe-panel` (the old address

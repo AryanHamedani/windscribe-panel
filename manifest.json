@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "id": "io.github.aryanhamedani.windscribe",
   "name": "Windscribe",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "Aryan Hamedani",
   "license": "MIT",
   "homepage": "https://github.com/AryanHamedani/windscribe-panel",
-  "description": "Windscribe VPN in the Omarchy bar: status, locations, censorship settings and country split tunneling",
+  "description": "Windscribe VPN in the bar: status, locations sorted by ping, censorship settings and country split tunneling",
   "kinds": [
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "barWidget": "omarchy/Panel.qml"
   },
   "barWidget": {
     "displayName": "Windscribe",

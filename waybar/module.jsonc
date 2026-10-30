@@ -1,0 +1,28 @@
+// Windscribe for Waybar. Include this file from your Waybar config and add
+// "custom/windscribe" to a modules list:
+//
+//   "include": ["~/.config/waybar/windscribe-panel.jsonc"],
+//   "modules-right": ["custom/windscribe", ...],
+//
+// The icons are Nerd Font glyphs; swap them for anything you like.
+{
+  "custom/windscribe": {
+    "exec": "windscribe-panel waybar",
+    "return-type": "json",
+    "interval": 10,
+    "signal": 8,
+    "format": "{icon}",
+    "format-icons": {
+      "connected": "󰕥",
+      "connecting": "󱆢",
+      "off": "󰦞",
+      "unprotected": "󰻌",
+      "signedOut": "󰫜",
+      "unknown": "󰫜"
+    },
+    "tooltip": true,
+    "on-click": "windscribe-panel menu",
+    "on-click-right": "windscribe-panel settings",
+    "on-click-middle": "windscribe-panel toggle"
+  }
+}

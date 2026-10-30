@@ -1,36 +1,47 @@
 # Windscribe Panel
 
 [![test](https://github.com/AryanHamedani/windscribe-panel/actions/workflows/test.yml/badge.svg)](https://github.com/AryanHamedani/windscribe-panel/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/release/AryanHamedani/windscribe-panel)](https://github.com/AryanHamedani/windscribe-panel/releases)
+[![license](https://img.shields.io/github/license/AryanHamedani/windscribe-panel)](LICENSE)
 
-Windscribe VPN in the [Omarchy](https://omarchy.org) bar. One icon tells you
-whether you are protected; one click gets you a location, the connection
-settings, and split tunneling that keeps a whole country's networks out of
-the tunnel.
+Windscribe VPN in your Linux desktop bar. One icon tells you whether you are
+protected; one click picks a location, fastest first; and split tunneling
+keeps a whole country's networks out of the tunnel, refreshed every week.
 
-![Windscribe panel: overview, connection settings, split tunneling](docs/preview.png)
+![Waybar: the status icon and the location menu, sorted by ping](docs/waybar.png)
 
-Built for using Windscribe from Iran, where local sites block foreign IPs and
-foreign sites are blocked locally, so you want both at once. It works the same
-for any country.
+Built for using Windscribe from Iran, where local sites refuse foreign IPs
+and foreign sites are filtered locally, so you need both at once. It works the
+same for any country.
 
-- **Bar icon**: plain when connected, pulsing while connecting, struck through
-  when off, and in the urgent color when off *without* the firewall, the one
-  state where traffic is leaving unprotected.
-- **Overview**: location, VPN IP (click to copy), data used, firewall, DNS,
-  LAN and bypass state, the same stat grid as Omarchy's Network panel.
-- **Locations**: every server with its ping, link speed and load, fastest
-  first (or grouped by region). Type to search, `↑` `↓`, `Enter` to connect.
-- **Connection**: auto-connect, protocol (Auto, WireGuard, Stealth, WStunnel,
-  UDP, TCP), censorship circumvention with AmneziaWG presets, LAN traffic.
-- **Split tunneling**: every IP range allocated to a country, refreshed
-  weekly from RIPEstat, plus up to 50 hostnames of your own.
-- **Safe disconnect**: asks first, and tells you whether the firewall will
-  block the internet or your traffic will go out bare.
-
-The panel only talks to `windscribe-cli` and its config file. No daemon of its
-own, no root, no network access except the weekly RIPEstat fetch.
+- **Status at a glance.** Distinct icons for connected, connecting, off with
+  the firewall holding, and off *without* it, the one state where your
+  traffic leaves unprotected.
+- **Locations by ping.** Every server with its latency, link speed and load,
+  fastest first.
+- **Censorship tools.** Protocol (WireGuard, Stealth, WStunnel, UDP, TCP),
+  Windscribe's censorship circumvention and its AmneziaWG presets.
+- **Country split tunneling.** All of a country's IP ranges bypass the VPN,
+  plus up to 50 hostnames of your own.
+- **Safe by default.** Disconnecting asks first and says what happens to
+  your traffic. Nothing runs as root; settings are written atomically.
 
 > Unofficial. Not affiliated with or endorsed by Windscribe.
+
+## Where it runs
+
+It is one program, `windscribe-panel`, with two front ends on top:
+
+| Desktop | Front end | What you get |
+|---|---|---|
+| **Waybar**, on Hyprland, Sway, niri, river or any wlroots compositor | `waybar/` module | Icon with a status tooltip; click for locations, right-click for settings, middle-click to connect or disconnect. Menus open in fuzzel, wofi, rofi, tofi or bemenu. |
+| **Omarchy** | `omarchy/` shell panel | A native popup in the Omarchy bar, matching its Network panel. |
+| **Any other bar** | `windscribe-panel waybar` | Most bars can run a command and show its JSON output (Waybar's format); bind the menu commands to keys. |
+
+The Linux side needs systemd and one of pacman, apt, dnf or zypper; Windscribe
+publishes its CLI for Arch, Debian/Ubuntu, Fedora and openSUSE.
+
+![Omarchy: overview, connection settings, split tunneling](docs/omarchy.png)
 
 ## Install
 
@@ -38,165 +49,172 @@ own, no root, no network access except the weekly RIPEstat fetch.
 curl -fsSL https://raw.githubusercontent.com/AryanHamedani/windscribe-panel/main/install.sh | bash
 ```
 
-That one command, safe to run again at any time (it is also how you update):
+Run the same command to update. It:
 
-1. installs what is missing: `python`, `iputils`, `jq`, `curl`, and
-   **`windscribe-cli`** itself, the official Arch package from
+1. installs what is missing: `python3`, `ping`, `jq`, `curl`, a menu
+   launcher (fuzzel) if you have none, and **`windscribe-cli`** itself, the
+   official package from
    [Windscribe's GitHub releases](https://github.com/Windscribe/Desktop-App/releases),
    checked against its published sha256,
-2. adds the plugin with `omarchy plugin add` and puts it beside Network,
+2. installs the front end for your desktop: the Omarchy panel on Omarchy,
+   otherwise the command into `~/.local/bin` and the Waybar module into
+   `~/.config/waybar/`,
 3. starts Windscribe's services and signs you in if needed,
-4. turns split tunneling on, in Exclude mode,
-5. fetches Iran's ranges (`… | bash -s -- DE` for another country),
-6. installs `windscribe-split-refresh.timer` to refresh them weekly.
+4. turns split tunneling on, in Exclude mode, and fetches Iran's ranges
+   (`… | bash -s -- DE` for another country),
+5. installs `windscribe-split-refresh.timer` to refresh them weekly.
 
-It asks for your password for `pacman` and Windscribe's sign-in, nothing else.
-Upgrade the CLI later with `bin/setup --update-cli`.
+It asks for your password for the package manager and your Windscribe
+sign-in, nothing else. `--waybar` picks the Waybar front end even on Omarchy.
 
-### What it needs
+**Waybar** needs two lines in your config, which the installer prints rather
+than editing a file you wrote by hand:
 
-**Omarchy 4.** The panel is built from the Omarchy shell's own components
-(`qs.Commons`, `qs.Ui`, its bar and plugin registry), so it looks and behaves
-like the stock panels, and it runs only inside that shell, not on Hyprland
-by itself. The backend (`backend.py`, `bin/windscribe-split-refresh`) is plain
-Python over `windscribe-cli` and works on any Linux.
+```jsonc
+"include": ["~/.config/waybar/windscribe-panel.jsonc"],
+"modules-right": ["custom/windscribe", "network", "clock"],
+```
 
-Prefer to do it by hand? `omarchy plugin add https://github.com/AryanHamedani/windscribe-panel --enable`,
-then run `bin/setup` from the plugin folder.
+and `@import "windscribe-panel.css";` at the top of `style.css`.
 
 ## Use
 
-| Action                     | Does                                     |
-|----------------------------|------------------------------------------|
-| Left click                 | Open or close the panel                  |
-| Middle click               | Connect or disconnect                    |
-| Type in the panel          | Search locations                         |
-| `↑` `↓`, `Enter`           | Pick a location and connect              |
-| `Enter` with an empty search | Connect to the best location           |
-| `Esc`                      | Clear the search, go back, or close      |
+| Waybar | Omarchy | Does |
+|---|---|---|
+| Click | Click | Locations, fastest first |
+| Right-click | Click, then **Connection** or **Split tunneling** | Settings |
+| Middle-click | Middle-click | Connect, or disconnect after asking |
+| Hover | Click | Location, VPN IP, protocol, firewall, data, bypass |
 
-From a keybinding or a script:
+The same actions from a terminal or a key binding:
 
 ```bash
-omarchy shell io.github.aryanhamedani.windscribe toggle      # the panel
-omarchy shell io.github.aryanhamedani.windscribe connect     # last location
-omarchy shell io.github.aryanhamedani.windscribe disconnect
-omarchy shell io.github.aryanhamedani.windscribe view bypass # main | settings | bypass
+windscribe-panel menu       # pick a location
+windscribe-panel settings   # protocol, censorship, LAN, split tunneling
+windscribe-panel toggle     # connect, or disconnect after asking
+windscribe-panel waybar     # the status as Waybar JSON
 ```
 
-For example, in `~/.config/hypr/bindings.conf`:
+```ini
+# Hyprland
+bind = SUPER ALT, V, exec, windscribe-panel menu
+# Sway
+bindsym $mod+Mod1+v exec windscribe-panel menu
+```
 
-```
-bindd = SUPER ALT, V, Windscribe, exec, omarchy shell io.github.aryanhamedani.windscribe toggle
-```
+On Omarchy, `omarchy shell io.github.aryanhamedani.windscribe toggle` opens the
+panel; `connect`, `disconnect` and `view settings|bypass` work too.
 
 ## Configure
 
-Settings go on the widget's entry in `~/.config/omarchy/shell.json`:
+| Setting | Where | Default | Meaning |
+|---|---|---|---|
+| `WINDSCRIBE_PANEL_MENU` | environment | first of fuzzel, wofi, rofi, tofi, bemenu | Your own dmenu-style command, e.g. `rofi -dmenu -i -p` |
+| `WINDSCRIBE_PANEL_SIGNAL` | environment | `8` | Signal that refreshes the Waybar module; match `"signal"` in the module |
+| `WINDSCRIBE_BYPASS_COUNTRY` | environment | the last country fetched | Country the settings menu refreshes |
+| icons, colors | `windscribe-panel.jsonc`, `windscribe-panel.css` | Nerd Font shields | Per state: `connected`, `connecting`, `off`, `unprotected`, `signedOut`, `unknown` |
+| `pinnedRegions` | Omarchy `shell.json` entry | `[]` | Regions listed first when sorting by region (`"US"` pins all three US regions) |
+| `sortBy` | Omarchy `shell.json` entry | `"ping"` | `"ping"` or `"region"` |
+| `bypassCountry` | Omarchy `shell.json` entry | the last country fetched | Country the panel's refresh button fetches |
 
-```json
-{ "id": "io.github.aryanhamedani.windscribe", "pinnedRegions": ["US", "Germany"], "bypassCountry": "IR" }
-```
-
-| Setting         | Default | Meaning                                                        |
-|-----------------|---------|----------------------------------------------------------------|
-| `pinnedRegions` | `[]`    | Regions listed first. Prefixes: `"US"` pins US East, Central and West |
-| `bypassCountry` | `"IR"`  | Country the panel's refresh button fetches. Match it to `bin/setup` |
-| `sortBy`        | `"ping"`| Initial location order: `"ping"` or `"region"`                 |
-
-Everything else (protocol, firewall, presets) lives in Windscribe's own config,
-`~/.config/Windscribe/windscribe_cli.conf`, which the panel edits for you.
+Everything else (protocol, firewall, presets) is Windscribe's own config,
+`~/.config/Windscribe/windscribe_cli.conf`, which the menus edit for you.
 
 ## Ping, speed and load
 
 Speed (link capacity) and load come from the public server list the Windscribe
-apps themselves download. Ping is measured by the plugin: two ICMP probes to
-each location's ping address, all in parallel, about five seconds for the
-whole list, cached for 15 minutes. `󰑐` beside the sort buttons measures again.
+apps themselves download. Ping is measured here: two ICMP probes to each
+location's ping address, all in parallel, about five seconds for the whole
+list, cached for 15 minutes.
 
-While connected, every probe also crosses the tunnel, so the numbers include
-the hop to your server and rank locations by their distance from *it*. The
-panel says so, and keeps a measurement taken while disconnected for a day in
-preference to a fresh tunnelled one. To get direct times, disconnect once and
-open the panel.
+While connected, every probe also crosses the tunnel, so the times include
+the hop to your server and rank locations by their distance from *it*. Both
+front ends say so, and a measurement taken while disconnected is kept for a
+day in preference to a fresh tunnelled one. For direct times, disconnect once
+and open the list.
 
-## How split tunneling works here
+## Split tunneling
 
 Windscribe's Exclude mode sends listed destinations around the tunnel.
-`bin/windscribe-split-refresh` fills that list with every range RIPEstat
-records for the country, IPv4 and IPv6, collapsed (about 2,300 entries for
-Iran; Windscribe takes up to 4,096). It refuses anything that looks wrong:
-private or reserved space, a block wider than /8, an empty answer.
+`windscribe-split-refresh` fills that list with every range RIPEstat records
+for the country, IPv4 and IPv6, collapsed (about 2,300 entries for Iran;
+Windscribe takes up to 4,096). It refuses anything that looks wrong: private
+or reserved space, a block wider than /8, an empty answer.
 
 What it keeps:
 
-- Hostnames you added, in the panel or by hand.
+- Hostnames you added, in a menu or by hand.
 - IP ranges you added by hand. It remembers which ranges it wrote last
   (`~/.local/state/windscribe-panel/country-ranges.json`) and only replaces
   those.
-- Every other line of the config, byte for byte. A copy of the previous file
-  is left at `windscribe_cli.conf.bak`.
+- Every other line of the config, byte for byte. The previous file is kept at
+  `windscribe_cli.conf.bak`.
 
 ```bash
-bin/windscribe-split-refresh --dry-run   # fetch and check, write nothing
-journalctl --user -u windscribe-split-refresh   # what the timer did
+windscribe-split-refresh --dry-run                # fetch and check, write nothing
+journalctl --user -u windscribe-split-refresh     # what the timer did
 ```
 
 **DNS is separate.** Windscribe's R.O.B.E.R.T. filters DNS for every site,
 bypassed or not. If a bypassed site resolves to `0.0.0.0`, allow it in your
-[R.O.B.E.R.T. rules](https://windscribe.com/myaccount#robertrules); the
-Connection page links there.
+[R.O.B.E.R.T. rules](https://windscribe.com/myaccount#robertrules).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Icon struck through, panel says *Unavailable* | `systemctl --user status windscribe.service`; the CLI needs its service |
-| *Signed out* | Click **Sign in**, or run `windscribe-cli login` |
-| A local site still goes through the VPN | It is hosted abroad: add its hostname on the Split tunneling page |
-| Every ping reads `--` | ICMP is blocked on your network; sort by region instead |
-| A local site does not load at all | Check R.O.B.E.R.T., then try another protocol (Stealth works on most filtered networks) |
-| No internet after disconnecting | That is the firewall doing its job; connect again, or turn it off with `windscribe-cli firewall off` |
+| Icon shows *Unavailable* | `systemctl --user status windscribe.service`; the CLI needs its service |
+| *Signed out* | `windscribe-cli login` |
+| Waybar icon never changes after a click | The module's `"signal"` must match `WINDSCRIBE_PANEL_SIGNAL` (8) |
+| Menus do not open | Install fuzzel, wofi, rofi, tofi or bemenu, or set `WINDSCRIBE_PANEL_MENU` |
+| Every ping reads `--` | ICMP is blocked on your network; the list falls back to region order |
+| A local site still goes through the VPN | It is hosted abroad: add its hostname to the bypass |
+| No internet after disconnecting | The firewall is doing its job; connect again, or `windscribe-cli firewall off` |
 
 ## Uninstall
 
 ```bash
-~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe/bin/setup --uninstall
-omarchy plugin remove io.github.aryanhamedani.windscribe --yes
+~/.local/share/windscribe-panel/bin/setup --uninstall   # or the Omarchy plugin folder
+rm -rf ~/.local/share/windscribe-panel ~/.local/bin/windscribe-panel ~/.local/bin/windscribe-split-refresh \
+       ~/.config/waybar/windscribe-panel.{jsonc,css}
+# Omarchy: omarchy plugin remove io.github.aryanhamedani.windscribe --yes
 ```
 
-Windscribe itself and its settings are left as they are
-(`sudo pacman -R windscribe-cli` removes the CLI).
+Windscribe and its settings are left as they are; your package manager
+removes `windscribe-cli`.
 
-## Development
+## Contributing
 
 ```
-Panel.qml                     the bar icon and popup (Quickshell / QML)
-backend.py                    JSON adapter: windscribe-cli calls, config edits
+bin/windscribe-panel          the program: windscribe-cli calls, config edits,
+                              pings, Waybar output, launcher menus, JSON API
 bin/windscribe-split-refresh  country ranges -> split tunnel route list
-bin/setup                     dependencies, Windscribe setup, weekly refresh
+bin/setup                     dependencies, Windscribe setup, weekly timer
 install.sh                    one-command install / update
-tests/test_backend.py         parsers, validation, atomic writes
+waybar/                       Waybar module and style
+omarchy/                      Omarchy shell panel (QML); manifest.json is its entry
+tests/                        unit tests, no network or Windscribe needed
 ```
 
-The panel never runs anything but `backend.py`, and `backend.py` only ever
-runs `windscribe-cli` with fixed arguments and whitelisted settings, so a bad
-click cannot write arbitrary values into the config. Every config write takes
-a lock shared with the refresher and replaces the file atomically.
-
-Hack on a clone in place of the installed copy; the shell reloads a plugin
-when its files change:
+Everything that touches Windscribe lives in `bin/windscribe-panel`: it only
+runs `windscribe-cli` with fixed arguments and whitelisted settings, and every
+config write takes a lock shared with the refresher and replaces the file
+atomically. A front end only draws and sends intents, so adding one for
+another bar or shell means calling the JSON API:
 
 ```bash
-git clone https://github.com/AryanHamedani/windscribe-panel ~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe
-python3 -m unittest discover -s tests       # tests
-python3 backend.py status | jq              # what the panel sees
-omarchy shell io.github.aryanhamedani.windscribe inspect
-journalctl --user -f | grep windscribe      # QML errors
+windscribe-panel status | jq      # state, settings, bypass
+windscribe-panel catalog | jq     # locations with speed and load
+windscribe-panel pings | jq       # latency per location
+windscribe-panel connect best     # connect, disconnect, set, preset, domain, refresh-ranges
 ```
 
-If a new CLI version prints something the parsers do not expect, add the
-output to `tests/test_backend.py` first. Pull requests welcome.
+```bash
+python3 -m unittest discover -s tests
+```
+
+If a new Windscribe CLI prints something the parsers do not expect, add the
+output to `tests/` first. Pull requests welcome.
 
 ## License
 

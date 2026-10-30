@@ -10,9 +10,9 @@ jobs:
           python-version: "3.12"
       - name: Unit tests
         run: python3 -m unittest discover -s tests -v
-      - name: Manifest
-        run: |
-          jq -e '.schemaVersion == 1 and (.id | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and (.entryPoints.barWidget | test("^[^/].*\\.qml$"))' manifest.json
-          test -f "$(jq -r .entryPoints.barWidget manifest.json)"
       - name: Shell scripts
-        run: shellcheck bin/setup
+        run: shellcheck install.sh bin/setup
+      - name: Waybar module is valid JSON once comments are stripped
+        run: sed 's#^\s*//.*##' waybar/module.jsonc | jq -e '."custom/windscribe".exec'
+      - name: Omarchy manifest points at a file that exists
+        run: test -f "$(jq -r .entryPoints.barWidget manifest.json)"

@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Set Windscribe up for the panel, or take the setup back out.
+# Set Windscribe up for the bar, or take the setup back out. Works on any
+# systemd distribution with pacman, apt, dnf or zypper.
 #
 #   bin/setup               # bypass Iran (IR)
 #   bin/setup DE            # bypass another country
@@ -31,17 +32,58 @@ for arg in "$@"; do
   esac
 done
 
-# The official Arch package, from Windscribe's own GitHub releases, checked
-# against the sha256 GitHub records for the upload.
+if command -v pacman >/dev/null; then pm=pacman
+elif command -v apt-get >/dev/null; then pm=apt
+elif command -v dnf >/dev/null; then pm=dnf
+elif command -v zypper >/dev/null; then pm=zypper
+else pm=""; fi
+
+apt_ready=0
+apt_update() { ((apt_ready)) || { sudo apt-get update; apt_ready=1; }; }
+
+pkg_install() {
+  case $pm in
+  pacman) sudo pacman -S --needed --noconfirm "$@" ;;
+  apt) apt_update && sudo apt-get install -y "$@" ;;
+  dnf) sudo dnf install -y "$@" ;;
+  zypper) sudo zypper -n install "$@" ;;
+  *) die "install these yourself, then run this again: $*" ;;
+  esac
+}
+
+# Package names differ only for python and ping.
+dep_package() {
+  case $1:$pm in
+  python3:pacman) echo python ;;
+  python3:*) echo python3 ;;
+  ping:apt) echo iputils-ping ;;
+  ping:*) echo iputils ;;
+  *) echo "$1" ;;
+  esac
+}
+
+# The official package for this system, from Windscribe's own GitHub
+# releases, checked against the sha256 GitHub records for the upload.
 install_cli() {
-  local release name url digest tmp
+  local release name url digest tmp arch pattern
+  case $(uname -m) in
+  x86_64) arch=amd64 ;;
+  aarch64) arch=arm64 ;;
+  *) die "Windscribe publishes packages for x86_64 and aarch64 only" ;;
+  esac
+  case $pm in
+  pacman) pattern="_${arch}\\.pkg\\.tar\\.zst$" ;;
+  apt) pattern="_${arch}\\.deb$" ;;
+  dnf) pattern="_${arch}_fedora\\.rpm$" ;;
+  zypper) pattern="_${arch}_opensuse\\.rpm$" ;;
+  *) die "install windscribe-cli from https://windscribe.com/download, then run this again" ;;
+  esac
   release=$(curl -fsSL https://api.github.com/repos/Windscribe/Desktop-App/releases/latest) \
     || die "could not reach GitHub to download windscribe-cli"
-  name=$(jq -r '.assets[] | select(.name | test("^windscribe-cli_.*_amd64\\.pkg\\.tar\\.zst$")) | .name' <<<"$release" | head -1)
+  name=$(jq -r --arg p "^windscribe-cli_.*$pattern" '.assets[] | select(.name | test($p)) | .name' <<<"$release" | head -1)
   url=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .browser_download_url' <<<"$release")
   digest=$(jq -r --arg n "$name" '.assets[] | select(.name == $n) | .digest // ""' <<<"$release")
-  [[ -n $name && -n $url ]] || die "no Arch package in the latest Windscribe release"
-  [[ $(uname -m) == x86_64 ]] || die "Windscribe only publishes x86_64 Arch packages"
+  [[ -n $name && -n $url ]] || die "the latest Windscribe release has no $pm package for $arch"
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
   note "Downloading $name"
@@ -51,7 +93,12 @@ install_cli() {
   else
     note "GitHub has no checksum for this upload; installing on HTTPS trust alone"
   fi
-  sudo pacman -U --needed --noconfirm "$tmp/$name"
+  case $pm in
+  pacman) sudo pacman -U --needed --noconfirm "$tmp/$name" ;;
+  apt) apt_update && sudo apt-get install -y "$tmp/$name" ;;
+  dnf) sudo dnf install -y "$tmp/$name" ;;
+  zypper) sudo zypper -n install --allow-unsigned-rpm "$tmp/$name" ;;
+  esac
 }
 
 if [[ ${uninstall:-0} == 1 ]]; then
@@ -68,13 +115,12 @@ country=$(tr '[:lower:]' '[:upper:]' <<<"$country")
 
 step "Checking dependencies"
 missing=()
-for pair in python3:python ping:iputils jq:jq curl:curl; do
-  command -v "${pair%%:*}" >/dev/null || missing+=("${pair#*:}")
+for cmd in python3 ping jq curl; do
+  command -v "$cmd" >/dev/null || missing+=("$(dep_package "$cmd")")
 done
-((${#missing[@]} == 0)) || sudo pacman -S --needed --noconfirm "${missing[@]}"
-if pacman -Q windscribe >/dev/null 2>&1; then
-  note "The Windscribe GUI package is installed; it ships windscribe-cli too"
-elif ! command -v windscribe-cli >/dev/null || ((update_cli)); then
+((${#missing[@]} == 0)) || pkg_install "${missing[@]}"
+# The Windscribe GUI package ships windscribe-cli too, so either one will do.
+if ! command -v windscribe-cli >/dev/null || ((update_cli)); then
   step "Installing windscribe-cli"
   install_cli
 fi
@@ -98,8 +144,8 @@ if windscribe-cli status 2>/dev/null | grep 'Logged out' >/dev/null; then
 fi
 
 step "Turning split tunneling on, in Exclude mode"
-python3 "$HERE/backend.py" set SplitTunnelingMode Exclude >/dev/null
-python3 "$HERE/backend.py" set SplitTunnelingEnabled true >/dev/null
+python3 "$HERE/bin/windscribe-panel" set SplitTunnelingMode Exclude >/dev/null
+python3 "$HERE/bin/windscribe-panel" set SplitTunnelingEnabled true >/dev/null
 
 step "Fetching $country's network ranges"
 python3 "$HERE/bin/windscribe-split-refresh" "$country"
@@ -138,6 +184,6 @@ systemctl --user enable --now "$NAME.timer" >/dev/null
 note "Next run: $(systemctl --user show "$NAME.timer" -p NextElapseUSecRealtime --value)"
 
 if [[ $country != IR ]]; then
-  note "Tell the panel too: add \"bypassCountry\": \"$country\" to its entry in ~/.config/omarchy/shell.json"
+  note "Both front ends now refresh $country by default."
 fi
 step "Done"

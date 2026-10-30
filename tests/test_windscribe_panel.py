@@ -19,7 +19,7 @@ def load(name, path):
     return module
 
 
-backend = load('backend', ROOT / 'backend.py')
+panel = load('windscribe_panel', ROOT / 'bin/windscribe-panel')
 refresher = load('refresher', ROOT / 'bin/windscribe-split-refresh')
 
 STATUS = """Internet connectivity: available
@@ -46,30 +46,30 @@ Home=trusted
 
 class Status(unittest.TestCase):
     def test_connected(self):
-        s = backend.parse_status(STATUS)
+        s = panel.parse_status(STATUS)
         self.assertEqual(s['state'], 'connected')
         self.assertEqual((s['city'], s['nickname']), ('Ashburn', 'Cloud City'))
         self.assertEqual(s['protocol'], 'WireGuard:443')
         self.assertEqual(s['usage'], '12.93 GB / Unlimited')
 
     def test_testing_star(self):
-        self.assertEqual(backend.parse_status(STATUS.replace('Connect state', '*Connect state'))['state'], 'testing')
+        self.assertEqual(panel.parse_status(STATUS.replace('Connect state', '*Connect state'))['state'], 'testing')
 
     def test_disconnected_with_firewall_is_blocked(self):
         text = STATUS.replace('Connected: Ashburn - Cloud City', 'Disconnected')
-        self.assertEqual(backend.parse_status(text)['state'], 'blocked')
+        self.assertEqual(panel.parse_status(text)['state'], 'blocked')
         text = text.replace('Always On', 'Off')
-        self.assertEqual(backend.parse_status(text)['state'], 'disconnected')
-        self.assertEqual(backend.parse_status(text)['location'], '')
+        self.assertEqual(panel.parse_status(text)['state'], 'disconnected')
+        self.assertEqual(panel.parse_status(text)['location'], '')
 
     def test_connecting_and_signed_out(self):
-        self.assertEqual(backend.parse_status(STATUS.replace('Connected: Ashburn - Cloud City', 'Connecting'))['state'], 'connecting')
-        self.assertEqual(backend.parse_status(STATUS.replace('Logged in', 'Logged out'))['state'], 'signedOut')
+        self.assertEqual(panel.parse_status(STATUS.replace('Connected: Ashburn - Cloud City', 'Connecting'))['state'], 'connecting')
+        self.assertEqual(panel.parse_status(STATUS.replace('Logged in', 'Logged out'))['state'], 'signedOut')
 
 
 class Locations(unittest.TestCase):
     def test_parse(self):
-        rows = backend.parse_locations('Best Location - Tram (10 Gbps)\n'
+        rows = panel.parse_locations('Best Location - Tram (10 Gbps)\n'
                                        'US East - Tampa - Big Guava\n'
                                        'US Central - Dallas - BBQ (10 Gbps)\n')
         self.assertEqual([r['id'] for r in rows], ['BBQ', 'Big Guava'])
@@ -78,52 +78,52 @@ class Locations(unittest.TestCase):
 
 class Hostnames(unittest.TestCase):
     def test_valid(self):
-        self.assertEqual(backend.hostname(' App.Example.IR. '), 'app.example.ir')
-        self.assertEqual(backend.hostname('بانک.ir'), 'بانک.ir'.encode('idna').decode())
-        self.assertTrue(backend.hostname('بانک.ir').startswith('xn--'))
+        self.assertEqual(panel.hostname(' App.Example.IR. '), 'app.example.ir')
+        self.assertEqual(panel.hostname('بانک.ir'), 'بانک.ir'.encode('idna').decode())
+        self.assertTrue(panel.hostname('بانک.ir').startswith('xn--'))
 
     def test_invalid(self):
         for bad in ['', 'localhost', 'https://a.ir', '*.a.ir', 'a.ir/path', '1.2.3.4', 'a b.ir', '-a.ir']:
             with self.assertRaises(ValueError, msg=bad):
-                backend.hostname(bad)
+                panel.hostname(bad)
 
     def test_add_remove_and_limit(self):
         routes = ['1.2.3.0/24', 'a.ir']
-        self.assertEqual(backend.change_domains(routes, 'add', 'b.ir'), routes + ['b.ir'])
-        self.assertEqual(backend.change_domains(routes, 'add', 'a.ir'), routes)
-        self.assertEqual(backend.change_domains(routes, 'remove', 'a.ir'), ['1.2.3.0/24'])
+        self.assertEqual(panel.change_domains(routes, 'add', 'b.ir'), routes + ['b.ir'])
+        self.assertEqual(panel.change_domains(routes, 'add', 'a.ir'), routes)
+        self.assertEqual(panel.change_domains(routes, 'remove', 'a.ir'), ['1.2.3.0/24'])
         full = ['h%d.ir' % i for i in range(50)]
         with self.assertRaises(ValueError):
-            backend.change_domains(full, 'add', 'x.ir')
+            panel.change_domains(full, 'add', 'x.ir')
 
 
 class Ini(unittest.TestCase):
     def test_read(self):
-        prefs, routes = backend.read_preferences(CONFIG)
+        prefs, routes = panel.read_preferences(CONFIG)
         self.assertEqual(prefs['domains'], ['snapp.ir'])
         self.assertEqual(prefs['rangeCount'], 2)
         self.assertEqual(len(routes), 3)
 
     def test_edit_keeps_everything_else(self):
-        out = backend.edit_ini(CONFIG, {'AllowLANTraffic': 'true', 'Autoconnect': 'true'})
+        out = panel.edit_ini(CONFIG, {'AllowLANTraffic': 'true', 'Autoconnect': 'true'})
         self.assertIn('AllowLANTraffic=true\n', out)
         self.assertIn('Autoconnect=true\n[Networks]', out)
         self.assertEqual(out.replace('AllowLANTraffic=true\n', 'AllowLANTraffic=false\n').replace('Autoconnect=true\n', ''), CONFIG)
 
     def test_setting_whitelist(self):
-        self.assertEqual(backend.setting_changes('Autoconnect', 'true'), {'Autoconnect': 'true'})
-        self.assertEqual(backend.setting_changes('ManualConnectionProtocol', 'Stealth')['ConnectionMode'], 'Manual')
-        self.assertEqual(backend.setting_changes('SplitTunnelingMode', 'Exclude'), {'SplitTunnelingMode': 'Exclude'})
+        self.assertEqual(panel.setting_changes('Autoconnect', 'true'), {'Autoconnect': 'true'})
+        self.assertEqual(panel.setting_changes('ManualConnectionProtocol', 'Stealth')['ConnectionMode'], 'Manual')
+        self.assertEqual(panel.setting_changes('SplitTunnelingMode', 'Exclude'), {'SplitTunnelingMode': 'Exclude'})
         for key, value in [('SplitTunnelingMode', 'All'), ('Autoconnect', 'yes'), ('FirewallMode', 'Off'), ('ManualConnectionProtocol', 'IKEv2')]:
             with self.assertRaises(ValueError):
-                backend.setting_changes(key, value)
+                panel.setting_changes(key, value)
 
     def test_mutate_writes_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'windscribe_cli.conf'
             path.write_text(CONFIG)
-            with mock.patch.object(backend, 'CONFIG', path), mock.patch.object(backend, 'CONFIG_LOCK', Path(tmp) / 'lock'):
-                backend.mutate(lambda p, r: {'SplitTunnelingRoutes': ', '.join(backend.change_domains(r, 'add', 'x.ir'))})
+            with mock.patch.object(panel, 'CONFIG', path), mock.patch.object(panel, 'CONFIG_LOCK', Path(tmp) / 'lock'):
+                panel.mutate(lambda p, r: {'SplitTunnelingRoutes': ', '.join(panel.change_domains(r, 'add', 'x.ir'))})
             self.assertIn('SplitTunnelingRoutes=2.144.0.0/14, 5.22.0.0/17, snapp.ir, x.ir\n', path.read_text())
             self.assertEqual(sorted(os.listdir(tmp)), ['lock', 'windscribe_cli.conf'])
 
@@ -135,18 +135,18 @@ class Pings(unittest.TestCase):
         {'city': 'no nick'}]}]}
 
     def test_server_details(self):
-        d = backend.server_details(self.SERVERLIST)
+        d = panel.server_details(self.SERVERLIST)
         self.assertEqual(d['Cloud City'], {'link': 10000, 'load': 6, 'pingIp': '198.51.100.1'})
         self.assertEqual(d['Sunny']['link'], 1000)
         self.assertEqual(len(d), 2)
 
     def test_ping_parse(self):
         out = '--- x ping statistics ---\n2 packets transmitted, 2 received\nrtt min/avg/max/mdev = 189.1/190.4/191.7/1.3 ms\n'
-        with mock.patch.object(backend.subprocess, 'run', return_value=mock.Mock(stdout=out)):
-            self.assertEqual(backend.ping_once('198.51.100.1'), 190)
-        with mock.patch.object(backend.subprocess, 'run', return_value=mock.Mock(stdout='100% packet loss')):
-            self.assertIsNone(backend.ping_once('198.51.100.1'))
-        self.assertIsNone(backend.ping_once('not-an-ip; rm -rf /'))
+        with mock.patch.object(panel.subprocess, 'run', return_value=mock.Mock(stdout=out)):
+            self.assertEqual(panel.ping_once('198.51.100.1'), 190)
+        with mock.patch.object(panel.subprocess, 'run', return_value=mock.Mock(stdout='100% packet loss')):
+            self.assertIsNone(panel.ping_once('198.51.100.1'))
+        self.assertIsNone(panel.ping_once('not-an-ip; rm -rf /'))
 
     def run_pings(self, cache, connected, force=False):
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,11 +154,11 @@ class Pings(unittest.TestCase):
             if cache is not None:
                 (state / 'pings.json').write_text(json.dumps(cache))
             status = STATUS if connected else STATUS.replace('Connected: Ashburn - Cloud City', 'Disconnected')
-            with mock.patch.object(backend, 'STATE_DIR', state), \
-                    mock.patch.object(backend, 'cli', return_value=status), \
-                    mock.patch.object(backend, 'cached_json', return_value=self.SERVERLIST), \
-                    mock.patch.object(backend, 'ping_once', return_value=42):
-                return backend.pings(force)
+            with mock.patch.object(panel, 'STATE_DIR', state), \
+                    mock.patch.object(panel, 'cli', return_value=status), \
+                    mock.patch.object(panel, 'cached_json', return_value=self.SERVERLIST), \
+                    mock.patch.object(panel, 'ping_once', return_value=42):
+                return panel.pings(force)
 
     def ago(self, seconds):
         from datetime import datetime, timedelta, timezone
@@ -182,6 +182,78 @@ class Pings(unittest.TestCase):
         result = self.run_pings(cache, connected=True, force=True)
         self.assertTrue(result['tunnel'])
         self.assertEqual(result['pings'], {'Cloud City': 42})
+
+
+class BarFrontEnd(unittest.TestCase):
+    def test_states(self):
+        for raw, shown in [('connected', 'connected'), ('testing', 'connecting'), ('connecting', 'connecting'),
+                           ('blocked', 'off'), ('disconnected', 'unprotected'), ('signedOut', 'signedOut')]:
+            self.assertEqual(panel.bar_state({'state': raw}), shown)
+
+    def test_waybar_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'windscribe_cli.conf'
+            path.write_text(CONFIG)
+            with mock.patch.object(panel, 'CONFIG', path), mock.patch.object(panel, 'cli', return_value=STATUS), \
+                    mock.patch.object(panel, 'STATE', Path(tmp) / 'none'), mock.patch.object(panel, 'LEGACY_STATE', Path(tmp) / 'none'):
+                out = panel.waybar()
+        self.assertEqual((out['text'], out['alt'], out['class']), ('Ashburn', 'connected', 'connected'))
+        self.assertIn('198.51.100.7', out['tooltip'])
+        self.assertIn('2 ranges · 1 hosts', out['tooltip'])
+
+    def test_waybar_survives_a_dead_cli(self):
+        with mock.patch.object(panel, 'cli', side_effect=RuntimeError('windscribe-cli <is> not installed')):
+            out = panel.waybar()
+        self.assertEqual(out['class'], 'unknown')
+        self.assertIn('&lt;is&gt;', out['tooltip'])  # pango-escaped
+
+    def test_choose_uses_custom_launcher(self):
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': 'sed -n 2p'}):
+            self.assertEqual(panel.choose('x', ['first', 'second', 'third']), 'second')
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': 'false'}):
+            self.assertIsNone(panel.choose('x', ['first']))  # exit 1: dismissed
+
+    def test_custom_launcher_gets_its_prompt(self):
+        # The last argument is the prompt flag; the prompt must follow it.
+        calls = []
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': 'rofi -dmenu -i -p'}), \
+                mock.patch.object(panel.subprocess, 'run', side_effect=lambda cmd, **kw: calls.append(cmd) or mock.Mock(returncode=1, stdout='', stderr='')):
+            panel.choose('Location', ['a'])
+        self.assertEqual(calls[0], ['rofi', '-dmenu', '-i', '-p', 'Location '])
+
+    def test_launcher_fault_is_reported(self):
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': 'sh -c "echo bad flag >&2; exit 2"'}):
+            with self.assertRaises(RuntimeError) as caught:
+                panel.choose('x', ['a'])
+        self.assertIn('bad flag', str(caught.exception))
+
+    def test_padded_labels_survive_a_real_launcher(self):
+        # Location rows are padded for alignment; the launcher hands back the
+        # line however it trims it. Nothing mocked: a real command picks.
+        ran = []
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': 'sed -n 2p'}):
+            panel.pick('x', [('      Best location', lambda: ran.append('best')),
+                             ('  190 ms  Ashburn · Cloud City', lambda: ran.append('ashburn'))])
+        self.assertEqual(ran, ['ashburn'])
+
+    def test_missing_config_is_explained(self):
+        with mock.patch.object(panel, 'CONFIG', Path('/nonexistent/windscribe_cli.conf')), \
+                mock.patch.object(panel, 'cli', return_value=STATUS):
+            out = panel.waybar()
+        self.assertIn('windscribe-cli status once', out['tooltip'])
+
+    def test_blank_menu_variable_falls_back(self):
+        with mock.patch.dict(os.environ, {'WINDSCRIBE_PANEL_MENU': '   '}), \
+                mock.patch.object(panel.shutil, 'which', return_value=None):
+            with self.assertRaises(RuntimeError) as caught:
+                panel.choose('x', ['a'])
+        self.assertIn('No menu launcher', str(caught.exception))
+
+    def test_pick_runs_the_chosen_action(self):
+        ran = []
+        with mock.patch.object(panel, 'choose', return_value='b'):
+            panel.pick('x', [('a', lambda: ran.append('a')), ('b', lambda: ran.append('b'))])
+        self.assertEqual(ran, ['b'])
 
 
 class Refresher(unittest.TestCase):

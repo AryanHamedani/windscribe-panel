@@ -8,12 +8,12 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as UI
 
-// Windscribe for the Omarchy bar: a status icon, and a popup to connect,
-// pick a location, tune the connection, and manage split tunneling.
+// The Omarchy shell front end: a status icon, and a popup to connect, pick
+// a location, tune the connection, and manage split tunneling.
 //
-// Everything that touches Windscribe goes through backend.py, a small JSON
-// adapter over windscribe-cli, so this file only draws state and sends
-// intents. The layout follows the stock Network panel: hero, a stat grid,
+// Everything that touches Windscribe goes through bin/windscribe-panel, the
+// same program the Waybar front end runs, so this file only draws state and
+// sends intents. The layout follows the stock Network panel: hero, a stat grid,
 // then lists, with the two settings pages one click away.
 UI.Panel {
   id: root
@@ -39,8 +39,9 @@ UI.Panel {
   property string pendingKind: ""         // what the running action is, for the hero
   property int cursor: -1                 // keyboard highlight in the location list
 
-  readonly property string country: String(setting("bypassCountry", "IR")).toUpperCase()
-  readonly property string helper: decodeURIComponent(Qt.resolvedUrl("backend.py").toString().replace(/^file:\/\//, ""))
+  // The configured country, else the one last fetched (bin/setup's choice), else Iran.
+  readonly property string country: String(setting("bypassCountry", "") || bypass.country || "IR").toUpperCase()
+  readonly property string helper: decodeURIComponent(Qt.resolvedUrl("../bin/windscribe-panel").toString().replace(/^file:\/\//, ""))
   readonly property bool busy: actionProcess.running
   readonly property string vpnState: snapshot.state || "unknown"
   readonly property bool connected: vpnState === "connected" || vpnState === "testing"
