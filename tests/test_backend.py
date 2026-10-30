@@ -128,6 +128,62 @@ class Ini(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(tmp)), ['lock', 'windscribe_cli.conf'])
 
 
+class Pings(unittest.TestCase):
+    SERVERLIST = {'data': [{'name': 'US East', 'groups': [
+        {'nick': 'Cloud City', 'link_speed': '10000', 'health': 6, 'ping_ip': '198.51.100.1'},
+        {'nick': 'Sunny', 'link_speed': '1000', 'health': 13, 'ping_ip': ''},
+        {'city': 'no nick'}]}]}
+
+    def test_server_details(self):
+        d = backend.server_details(self.SERVERLIST)
+        self.assertEqual(d['Cloud City'], {'link': 10000, 'load': 6, 'pingIp': '198.51.100.1'})
+        self.assertEqual(d['Sunny']['link'], 1000)
+        self.assertEqual(len(d), 2)
+
+    def test_ping_parse(self):
+        out = '--- x ping statistics ---\n2 packets transmitted, 2 received\nrtt min/avg/max/mdev = 189.1/190.4/191.7/1.3 ms\n'
+        with mock.patch.object(backend.subprocess, 'run', return_value=mock.Mock(stdout=out)):
+            self.assertEqual(backend.ping_once('198.51.100.1'), 190)
+        with mock.patch.object(backend.subprocess, 'run', return_value=mock.Mock(stdout='100% packet loss')):
+            self.assertIsNone(backend.ping_once('198.51.100.1'))
+        self.assertIsNone(backend.ping_once('not-an-ip; rm -rf /'))
+
+    def run_pings(self, cache, connected, force=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            if cache is not None:
+                (state / 'pings.json').write_text(json.dumps(cache))
+            status = STATUS if connected else STATUS.replace('Connected: Ashburn - Cloud City', 'Disconnected')
+            with mock.patch.object(backend, 'STATE_DIR', state), \
+                    mock.patch.object(backend, 'cli', return_value=status), \
+                    mock.patch.object(backend, 'cached_json', return_value=self.SERVERLIST), \
+                    mock.patch.object(backend, 'ping_once', return_value=42):
+                return backend.pings(force)
+
+    def ago(self, seconds):
+        from datetime import datetime, timedelta, timezone
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+    def test_fresh_cache_is_reused(self):
+        cache = {'pings': {'x': 1}, 'measured': self.ago(60), 'tunnel': True}
+        self.assertEqual(self.run_pings(cache, connected=True), cache)
+
+    def test_direct_measurement_beats_tunnel(self):
+        # An hour-old direct measurement is kept while connected, rather than re-measured through the tunnel.
+        cache = {'pings': {'x': 1}, 'measured': self.ago(3600), 'tunnel': False}
+        self.assertEqual(self.run_pings(cache, connected=True), cache)
+        # Disconnected, the same stale cache is measured again, directly.
+        fresh = self.run_pings(cache, connected=False)
+        self.assertEqual(fresh['pings'], {'Cloud City': 42})
+        self.assertFalse(fresh['tunnel'])
+
+    def test_force_and_tunnel_flag(self):
+        cache = {'pings': {'x': 1}, 'measured': self.ago(60), 'tunnel': False}
+        result = self.run_pings(cache, connected=True, force=True)
+        self.assertTrue(result['tunnel'])
+        self.assertEqual(result['pings'], {'Cloud City': 42})
+
+
 class Refresher(unittest.TestCase):
     def payload(self, v4, v6=()):
         return {'status': 'ok', 'data': {'resources': {'ipv4': list(v4), 'ipv6': list(v6)}}}

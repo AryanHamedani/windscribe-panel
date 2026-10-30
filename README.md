@@ -18,8 +18,8 @@ for any country.
   state where traffic is leaving unprotected.
 - **Overview**: location, VPN IP (click to copy), data used, firewall, DNS,
   LAN and bypass state, the same stat grid as Omarchy's Network panel.
-- **Locations**: all servers grouped by region, searchable, with your current
-  region on top. Type, use `↑` `↓`, press `Enter` to connect.
+- **Locations**: every server with its ping, link speed and load, fastest
+  first (or grouped by region). Type to search, `↑` `↓`, `Enter` to connect.
 - **Connection**: auto-connect, protocol (Auto, WireGuard, Stealth, WStunnel,
   UDP, TCP), censorship circumvention with AmneziaWG presets, LAN traffic.
 - **Split tunneling**: every IP range allocated to a country, refreshed
@@ -32,36 +32,37 @@ own, no root, no network access except the weekly RIPEstat fetch.
 
 > Unofficial. Not affiliated with or endorsed by Windscribe.
 
-## Requirements
-
-- Omarchy 4 (its Quickshell bar and plugin system)
-- The Windscribe CLI 2.24 or later, signed in
-- `python3` (Omarchy ships it)
-
-Install the CLI from Windscribe's own Arch package, which is kept current
-(the AUR's `windscribe-cli-v2-bin` lags behind):
-
-1. Download **Linux → Arch → CLI** from <https://windscribe.com/download>.
-2. `sudo pacman -U ~/Downloads/windscribe-cli_*.pkg.tar.zst`
-3. `windscribe-cli login`
-
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/AryanHamedani/omarchy-windscribe --enable
-~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe/bin/setup
+curl -fsSL https://raw.githubusercontent.com/AryanHamedani/omarchy-windscribe/main/install.sh | bash
 ```
 
-`omarchy plugin add` asks which bar section to use; right, beside Network,
-is the natural spot. `bin/setup` then:
+That one command, safe to run again at any time (it is also how you update):
 
-1. checks `windscribe-cli` and starts `windscribe.service`,
-2. signs you in if needed,
-3. turns split tunneling on in Exclude mode,
-4. fetches Iran's ranges (or pass a country: `bin/setup DE`),
-5. installs `omarchy-windscribe-refresh.timer` to refresh them weekly.
+1. installs what is missing: `python`, `iputils`, `jq`, `curl`, and
+   **`windscribe-cli`** itself, the official Arch package from
+   [Windscribe's GitHub releases](https://github.com/Windscribe/Desktop-App/releases),
+   checked against its published sha256,
+2. adds the plugin with `omarchy plugin add` and puts it beside Network,
+3. starts Windscribe's services and signs you in if needed,
+4. turns split tunneling on, in Exclude mode,
+5. fetches Iran's ranges (`… | bash -s -- DE` for another country),
+6. installs `omarchy-windscribe-refresh.timer` to refresh them weekly.
 
-Run it again any time; it only changes what is not already right.
+It asks for your password for `pacman` and Windscribe's sign-in, nothing else.
+Upgrade the CLI later with `bin/setup --update-cli`.
+
+### What it needs
+
+**Omarchy 4.** The panel is built from the Omarchy shell's own components
+(`qs.Commons`, `qs.Ui`, its bar and plugin registry), so it looks and behaves
+like the stock panels, and it runs only inside that shell, not on Hyprland
+by itself. The backend (`backend.py`, `bin/windscribe-split-refresh`) is plain
+Python over `windscribe-cli` and works on any Linux.
+
+Prefer to do it by hand? `omarchy plugin add https://github.com/AryanHamedani/omarchy-windscribe --enable`,
+then run `bin/setup` from the plugin folder.
 
 ## Use
 
@@ -101,9 +102,23 @@ Settings go on the widget's entry in `~/.config/omarchy/shell.json`:
 |-----------------|---------|----------------------------------------------------------------|
 | `pinnedRegions` | `[]`    | Regions listed first. Prefixes: `"US"` pins US East, Central and West |
 | `bypassCountry` | `"IR"`  | Country the panel's refresh button fetches. Match it to `bin/setup` |
+| `sortBy`        | `"ping"`| Initial location order: `"ping"` or `"region"`                 |
 
 Everything else (protocol, firewall, presets) lives in Windscribe's own config,
 `~/.config/Windscribe/windscribe_cli.conf`, which the panel edits for you.
+
+## Ping, speed and load
+
+Speed (link capacity) and load come from the public server list the Windscribe
+apps themselves download. Ping is measured by the plugin: two ICMP probes to
+each location's ping address, all in parallel, about five seconds for the
+whole list, cached for 15 minutes. `󰑐` beside the sort buttons measures again.
+
+While connected, every probe also crosses the tunnel, so the numbers include
+the hop to your server and rank locations by their distance from *it*. The
+panel says so, and keeps a measurement taken while disconnected for a day in
+preference to a fresh tunnelled one. To get direct times, disconnect once and
+open the panel.
 
 ## How split tunneling works here
 
@@ -139,6 +154,7 @@ Connection page links there.
 | Icon struck through, panel says *Unavailable* | `systemctl --user status windscribe.service`; the CLI needs its service |
 | *Signed out* | Click **Sign in**, or run `windscribe-cli login` |
 | A local site still goes through the VPN | It is hosted abroad: add its hostname on the Split tunneling page |
+| Every ping reads `--` | ICMP is blocked on your network; sort by region instead |
 | A local site does not load at all | Check R.O.B.E.R.T., then try another protocol (Stealth works on most filtered networks) |
 | No internet after disconnecting | That is the firewall doing its job; connect again, or turn it off with `windscribe-cli firewall off` |
 
@@ -149,7 +165,8 @@ Connection page links there.
 omarchy plugin remove io.github.aryanhamedani.windscribe --yes
 ```
 
-Windscribe itself and its settings are left as they are.
+Windscribe itself and its settings are left as they are
+(`sudo pacman -R windscribe-cli` removes the CLI).
 
 ## Development
 
@@ -157,7 +174,8 @@ Windscribe itself and its settings are left as they are.
 Panel.qml                     the bar icon and popup (Quickshell / QML)
 backend.py                    JSON adapter: windscribe-cli calls, config edits
 bin/windscribe-split-refresh  country ranges -> split tunnel route list
-bin/setup                     install / uninstall the weekly refresh
+bin/setup                     dependencies, Windscribe setup, weekly refresh
+install.sh                    one-command install / update
 tests/test_backend.py         parsers, validation, atomic writes
 ```
 

@@ -28,6 +28,9 @@ UI.Panel {
   property var locations: []
   property var presets: []
   property bool loaded: false
+  property var pings: ({})              // nickname -> ms
+  property bool pingsViaTunnel: false
+  property string sortMode: setting("sortBy", "ping") === "region" ? "region" : "ping"
 
   property string page: "main"            // main | settings | bypass
   property string errorText: ""
@@ -48,6 +51,11 @@ UI.Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color dim: Qt.darker(fg, 1.5)
   readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
+  // Qt shaves the first pixel column off a clipped area at fractional
+  // display scales (1.25, 1.5, ...), taking the left border of any control
+  // flush against it. Scroll areas extend this far past their content so the
+  // clip edge never touches a border.
+  readonly property real edge: Style.space(3)
 
   readonly property string statusLine: {
     if (pendingKind === "connect") return "CONNECTING…"
@@ -86,6 +94,20 @@ UI.Panel {
       ;(isPinned ? pinned : rest).push(row)
     }
     var all = pinned.concat(rest)
+    if (root.sortMode === "ping") {
+      // Fastest first; servers that did not answer go last.
+      var p = root.pings
+      all.sort(function(a, b) {
+        var pa = p[a.id], pb = p[b.id]
+        if (pa === undefined && pb === undefined) return 0
+        if (pa === undefined) return 1
+        if (pb === undefined) return -1
+        return pa - pb
+      })
+      if (current === "") return all
+      return all.filter(function(r) { return r.id === root.snapshot.nickname })
+        .concat(all.filter(function(r) { return r.id !== root.snapshot.nickname }))
+    }
     if (current === "") return all
     var currentRegion = (all.filter(function(r) { return r.city === current })[0] || {}).region
     return all.filter(function(r) { return r.region === currentRegion })
@@ -98,6 +120,24 @@ UI.Panel {
   // ---- Backend plumbing.
   function refresh() { if (!statusProcess.running) statusProcess.running = true }
   function loadCatalog() { if (!catalogProcess.running) catalogProcess.running = true }
+  function measurePings(force) {
+    if (pingProcess.running) return
+    pingProcess.command = ["python3", helper, "pings"].concat(force ? ["--force"] : [])
+    pingProcess.running = true
+  }
+
+  function speedText(row) {
+    var parts = []
+    if (row.link >= 1000) parts.push(Math.round(row.link / 1000) + " Gbps")
+    else if (row.link > 0) parts.push(row.link + " Mbps")
+    if (row.load !== undefined && row.load !== null) parts.push(row.load + "% load")
+    return parts.join(" · ")
+  }
+
+  function pingText(id) {
+    var ms = root.pings[id]
+    return ms === undefined ? (pingProcess.running ? "…" : "--") : ms + " ms"
+  }
 
   function perform(args, kind) {
     if (busy) return
@@ -147,6 +187,8 @@ UI.Panel {
       // Dropdowns assign their value internally on pick; reconcile with what was saved.
       protocolChoice.value = root.protocolChoiceValue
       presetChoice.value = preferences.AmneziawgPreset || ""
+    } else if (kind === "pings") {
+      if (result.ok) { pings = result.pings || {}; pingsViaTunnel = result.tunnel === true }
     } else if (kind === "catalog") {
       if (result.ok) { locations = result.locations; presets = result.presets }
       else errorText = result.error
@@ -161,6 +203,9 @@ UI.Panel {
     if (opened) {
       refresh()
       loadCatalog()
+      measurePings(false)
+      searchField.text = ""
+      locationList.positionViewAtBeginning()
     } else {
       confirmDisconnect = false
       errorText = ""
@@ -190,6 +235,11 @@ UI.Panel {
     id: catalogProcess
     command: ["python3", root.helper, "catalog"]
     stdout: StdioCollector { onStreamFinished: root.receive(text, "catalog") }
+  }
+
+  Process {
+    id: pingProcess
+    stdout: StdioCollector { onStreamFinished: root.receive(text, "pings") }
   }
 
   Process {
@@ -230,7 +280,7 @@ UI.Panel {
           anchors.centerIn: parent
           size: Math.round(Style.bar.iconCanvas * 0.78)
           tint: root.vpnState === "disconnected" || root.vpnState === "signedOut" ? root.urgent : root.barForeground
-          crossed: !root.tunnelOn && root.loaded
+          filled: root.tunnelOn || !root.loaded
           SequentialAnimation on opacity {
             running: root.vpnState === "connecting" || root.pendingKind === "connect"
             loops: Animation.Infinite
@@ -265,9 +315,12 @@ UI.Panel {
       Flickable {
         id: scroller
         anchors.fill: parent
+        anchors.leftMargin: -root.edge
+        anchors.rightMargin: -root.edge
         contentWidth: width
         contentHeight: content.implicitHeight
-        clip: true
+        // Only a scrolling page needs its clip; see `edge`.
+        clip: interactive
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
         QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
@@ -275,7 +328,8 @@ UI.Panel {
 
         Column {
           id: content
-          width: scroller.width
+          x: root.edge
+          width: scroller.width - 2 * root.edge
           spacing: Style.space(14)
 
           UI.PanelHero {
@@ -288,7 +342,7 @@ UI.Panel {
               BrandIcon {
                 size: Style.font.display
                 tint: root.connected ? Commons.Color.accent : root.fg
-                crossed: !root.tunnelOn && root.loaded
+                filled: root.tunnelOn || !root.loaded
                 opacity: root.connected ? 1 : 0.6
               }
             }
@@ -395,14 +449,65 @@ UI.Panel {
                 fontFamily: root.fontFamily
               }
 
-              Text {
+              Row {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: catalogProcess.running && root.locations.length === 0 ? "Loading…" : root.filteredLocations.length + " servers"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.space(10)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: catalogProcess.running && root.locations.length === 0 ? "Loading…" : root.filteredLocations.length + " servers"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Repeater {
+                  model: [{ key: "ping", label: "Ping" }, { key: "region", label: "Region" }]
+                  Text {
+                    id: sortLabel
+                    required property var modelData
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.label
+                    color: root.sortMode === modelData.key ? root.fg : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: root.sortMode === modelData.key
+                    font.underline: sortMouse.containsMouse
+                    MouseArea {
+                      id: sortMouse
+                      anchors.fill: parent
+                      anchors.margins: -Style.space(4)
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: { root.sortMode = sortLabel.modelData.key; locationList.positionViewAtBeginning() }
+                    }
+                  }
+                }
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰑐"
+                  color: pingRefresh.containsMouse ? root.fg : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  RotationAnimation on rotation { running: pingProcess.running; from: 0; to: 360; duration: 900; loops: Animation.Infinite }
+                  MouseArea {
+                    id: pingRefresh
+                    anchors.fill: parent
+                    anchors.margins: -Style.space(4)
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.measurePings(true)
+                  }
+                  UI.PanelToolTip { visible: pingRefresh.containsMouse; text: "Measure ping again"; fontFamily: root.fontFamily }
+                }
               }
+            }
+
+            Caption {
+              visible: root.pingsViaTunnel && root.sortMode === "ping"
+              text: "Measured through the VPN, so every time includes the hop to " + (root.snapshot.city || "your server") + ". Disconnect once and reopen for direct times."
             }
 
             UI.TextField {
@@ -441,10 +546,16 @@ UI.Panel {
               onActivated: root.connectTo("best")
             }
 
+            Item {
+              width: parent.width
+              height: locationList.height
+
             ListView {
               id: locationList
-              width: parent.width
-              height: Math.min(contentHeight, Style.space(232))
+              x: -root.edge
+              width: parent.width + 2 * root.edge
+              leftMargin: root.edge
+              height: Math.min(contentHeight, Style.space(260))
               clip: true
               spacing: Style.space(2)
               boundsBehavior: Flickable.StopAtBounds
@@ -459,11 +570,11 @@ UI.Panel {
                 required property var modelData
                 required property int index
                 readonly property bool firstOfRegion: index === 0 || root.filteredLocations[index - 1].region !== modelData.region
-                width: ListView.view.width
+                width: ListView.view.width - 2 * root.edge
                 spacing: Style.space(2)
 
                 UI.PanelSectionHeader {
-                  visible: entry.firstOfRegion
+                  visible: root.sortMode === "region" && entry.firstOfRegion
                   topPadding: entry.index === 0 ? 0 : Style.space(8)
                   text: entry.modelData.region.toUpperCase()
                   foreground: root.fg
@@ -473,13 +584,22 @@ UI.Panel {
                 LocationRow {
                   width: parent.width
                   title: entry.modelData.city
-                  trailing: entry.modelData.id
+                  titleDetail: entry.modelData.id
+                  subtitle: [root.sortMode === "ping" ? entry.modelData.region : "", root.speedText(entry.modelData)]
+                    .filter(function(t) { return t !== "" }).join(" · ")
+                  trailing: root.pingText(entry.modelData.id)
+                  trailingColor: {
+                    var ms = root.pings[entry.modelData.id]
+                    if (ms === undefined) return root.dim
+                    return ms < 150 ? root.fg : ms < 300 ? Qt.darker(root.fg, 1.25) : root.dim
+                  }
                   current: root.connected && root.snapshot.nickname === entry.modelData.id
                   highlighted: root.cursor === entry.index
                   onActivated: root.connectTo(entry.modelData.id)
                   onHoveredChanged: if (hovered) root.cursor = entry.index
                 }
               }
+            }
             }
 
             UI.PanelSeparator { width: parent.width; foreground: root.fg }
@@ -677,8 +797,15 @@ UI.Panel {
 
             Caption { text: "Exact hostnames: www.example.ir and example.ir are separate entries. Use this for services hosted outside the country's ranges." }
 
-            ListView {
+            Item {
               width: parent.width
+              height: hostList.height
+
+            ListView {
+              id: hostList
+              x: -root.edge
+              width: parent.width + 2 * root.edge
+              leftMargin: root.edge
               height: Math.min(contentHeight, Style.space(220))
               clip: true
               boundsBehavior: Flickable.StopAtBounds
@@ -688,7 +815,7 @@ UI.Panel {
               delegate: UI.CursorSurface {
                 id: hostRow
                 required property string modelData
-                width: ListView.view.width
+                width: ListView.view.width - 2 * root.edge
                 implicitHeight: Style.spacing.controlHeight
                 foreground: root.fg
                 hasCursor: hostMouse.containsMouse
@@ -721,6 +848,7 @@ UI.Panel {
                 }
               }
             }
+            }
           }
         }
       }
@@ -731,11 +859,13 @@ UI.Panel {
 
   // The Windscribe mark, tinted to the theme, with the same strike-through
   // the stock Tailscale icon uses for "off".
+  // Windscribe's own badge: filled with the W cut out when the tunnel is up,
+  // the outline when it is down.
   component BrandIcon: Item {
     id: brand
     property real size: Style.font.display
     property color tint: root.fg
-    property bool crossed: false
+    property bool filled: true
     implicitWidth: size
     implicitHeight: size
     width: size
@@ -744,7 +874,7 @@ UI.Panel {
     Image {
       id: mark
       anchors.fill: parent
-      source: Qt.resolvedUrl("assets/windscribe.svg")
+      source: Qt.resolvedUrl(brand.filled ? "assets/windscribe.svg" : "assets/windscribe-outline.svg")
       sourceSize: Qt.size(Math.ceil(brand.size * 3), Math.ceil(brand.size * 3))
       fillMode: Image.PreserveAspectFit
       smooth: true
@@ -755,17 +885,6 @@ UI.Panel {
       source: mark
       colorization: 1
       colorizationColor: brand.tint
-    }
-    Rectangle {
-      visible: brand.crossed
-      anchors.centerIn: parent
-      width: parent.width * 1.2
-      height: Math.max(2, parent.height * 0.12)
-      radius: height / 2
-      rotation: -45
-      color: brand.tint
-      border.width: Math.max(1, height * 0.35)
-      border.color: root.bar ? root.bar.background : Commons.Color.background
     }
   }
 
@@ -901,7 +1020,9 @@ UI.Panel {
     id: row
     property string title: ""
     property string subtitle: ""
+    property string titleDetail: ""
     property string trailing: ""
+    property color trailingColor: root.dim
     property string iconText: ""
     property bool highlighted: false
     readonly property bool hovered: rowMouse.containsMouse
@@ -940,15 +1061,31 @@ UI.Panel {
       Column {
         Layout.fillWidth: true
         spacing: Style.space(1)
-        Text {
+        Row {
           width: parent.width
-          text: row.title
-          textFormat: Text.PlainText
-          elide: Text.ElideRight
-          color: root.fg
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: row.current
+          spacing: Style.space(6)
+          Text {
+            id: rowTitle
+            width: Math.min(implicitWidth, parent.width)
+            text: row.title
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: row.current
+          }
+          Text {
+            visible: row.titleDetail !== ""
+            anchors.baseline: rowTitle.baseline
+            width: Math.max(0, parent.width - rowTitle.width - parent.spacing)
+            text: row.titleDetail
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
         }
         Text {
           visible: row.subtitle !== ""
@@ -964,11 +1101,12 @@ UI.Panel {
 
       Text {
         visible: text !== ""
-        text: row.current ? "Connected" : row.trailing
+        text: row.trailing
         textFormat: Text.PlainText
-        color: row.current ? root.fg : root.dim
+        color: row.current ? root.fg : row.trailingColor
         font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.bodySmall
+        font.bold: row.current
       }
     }
   }

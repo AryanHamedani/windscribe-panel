@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 (2026-10-30)
+
+- Locations show ping, link speed and load, sorted fastest first; a toggle
+  switches to grouping by region. Pings measured while disconnected are
+  preferred over tunnelled ones, and tunnelled ones are labelled.
+- One-command install and update (`install.sh`), and `bin/setup` now installs
+  its dependencies, `windscribe-cli` included: the official Arch package from
+  Windscribe's GitHub releases, verified against its sha256.
+- The bar and hero use Windscribe's own badge, filled when connected and
+  outlined when off, in place of a struck-through outline.
+- Fixed: the left border of the search field, buttons and rows disappeared at
+  fractional display scales (Qt's clip shaves the first pixel column).
+- Fixed: reopening the panel kept the old search and scroll position.
+
 ## 1.0.0 (2026-10-30)
 
 First public release.

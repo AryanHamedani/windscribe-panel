@@ -8,7 +8,9 @@ edits windscribe_cli.conf atomically under the same lock as the range refresher.
     backend.py status | catalog | connect [best|<nickname>] | disconnect
     backend.py set <Key> <value> | domain add|remove <hostname> | refresh-ranges [CC]
 """
+from concurrent.futures import ThreadPoolExecutor
 import configparser
+from datetime import datetime, timezone
 import fcntl
 import ipaddress
 import json
@@ -18,12 +20,18 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 CONFIG = Path(os.environ.get('WINDSCRIBE_CONFIG', Path.home() / '.config/Windscribe/windscribe_cli.conf'))
 STATE = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'omarchy-windscribe/country-ranges.json'
 CLI = os.environ.get('WINDSCRIBE_CLI', 'windscribe-cli')
 REFRESHER = HERE / 'bin/windscribe-split-refresh'
+STATE_DIR = STATE.parent
+SERVERLIST_URL = 'https://assets.windscribe.com/serverlist/mob-v2/1/1'
+SERVERLIST_TTL = 6 * 3600
+PING_TTL = 15 * 60
 CONFIG_LOCK = CONFIG.parent / '.omarchy-windscribe.lock'
 CLI_LOCK = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'omarchy-windscribe-cli.lock'
 
@@ -100,6 +108,96 @@ def parse_locations(text):
         result.append({'id': parts[-1], 'city': parts[-2], 'region': ' - '.join(parts[:-2]),
                        'speed': speed.group(1) if speed else ''})
     result.sort(key=lambda row: (row['region'], row['city'], row['id']))
+    return result
+
+
+def server_details(serverlist):
+    """nickname -> link speed, load and the address Windscribe itself pings,
+    from the public server list the Windscribe apps download."""
+    details = {}
+    for region in serverlist.get('data', []):
+        for group in region.get('groups', []):
+            nick = group.get('nick')
+            if not nick:
+                continue
+            try:
+                link = int(group.get('link_speed') or 0)
+            except ValueError:
+                link = 0
+            details[nick] = {'link': link, 'load': group.get('health'), 'pingIp': group.get('ping_ip') or ''}
+    return details
+
+
+def cached_json(path, ttl, fetch):
+    """The JSON at `path` if younger than `ttl`, else `fetch()` saved there.
+    A failed fetch falls back to a stale copy, then to None."""
+    try:
+        if time.time() - path.stat().st_mtime < ttl:
+            return json.loads(path.read_text())
+    except (OSError, ValueError):
+        pass
+    try:
+        data = fetch()
+    except Exception:
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data))
+    tmp.replace(path)
+    return data
+
+
+def fetch_serverlist():
+    with urllib.request.urlopen(SERVERLIST_URL, timeout=15) as response:
+        return json.loads(response.read(8_000_000))
+
+
+def ping_once(address):
+    """Round trip in ms to one server, or None. ICMP needs no privileges on Arch."""
+    try:
+        ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    try:
+        out = subprocess.run(['ping', '-n', '-q', '-c', '2', '-i', '0.2', '-W', '1', address],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = re.search(r'= [\d.]+/([\d.]+)/', out)
+    return round(float(match.group(1))) if match else None
+
+
+def measure_pings(targets, tunnel):
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        results = dict(zip(targets, pool.map(ping_once, targets.values())))
+    return {'pings': {nick: ms for nick, ms in results.items() if ms is not None},
+            'measured': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'tunnel': tunnel}
+
+
+def pings(force=False):
+    """Latency per location. Through the VPN every probe also crosses the
+    tunnel, which hides the real distance, so a measurement taken while
+    disconnected is kept for a day and preferred over a fresh tunnelled one."""
+    path = STATE_DIR / 'pings.json'
+    try:
+        cache = json.loads(path.read_text())
+        age = time.time() - datetime.fromisoformat(cache['measured']).timestamp()
+    except (OSError, ValueError, KeyError):
+        cache, age = None, float('inf')
+    tunnel = parse_status(cli('status'))['state'] in ('connected', 'testing', 'connecting')
+    if cache and not force:
+        if age < PING_TTL or (tunnel and not cache.get('tunnel') and age < 86400):
+            return cache
+    details = server_details(cached_json(STATE_DIR / 'serverlist.json', SERVERLIST_TTL, fetch_serverlist) or {})
+    targets = {nick: d['pingIp'] for nick, d in details.items() if d['pingIp']}
+    if not targets:
+        raise RuntimeError('Could not load the Windscribe server list to ping.')
+    result = measure_pings(targets, tunnel)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result))
     return result
 
 
@@ -223,8 +321,16 @@ def dispatch(args):
         prefs, _ = read_preferences(CONFIG.read_text())
         return {'status': parse_status(cli('status')), 'settings': prefs, 'bypass': bypass_state()}
     if args == ['catalog']:
-        return {'locations': parse_locations(cli('locations')),
+        locations = parse_locations(cli('locations'))
+        details = server_details(cached_json(STATE_DIR / 'serverlist.json', SERVERLIST_TTL, fetch_serverlist) or {})
+        for row in locations:
+            extra = details.get(row['id'], {})
+            row['link'] = extra.get('link', 0)
+            row['load'] = extra.get('load')
+        return {'locations': locations,
                 'presets': [p for p in cli('amneziawg').splitlines() if p.strip()]}
+    if args in (['pings'], ['pings', '--force']):
+        return pings(force=len(args) == 2)
     if args == ['connect']:
         cli('connect', '-n')
         return {'message': 'Connecting to your last location…'}
