@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -32,8 +33,9 @@ URL = 'https://stat.ripe.net/data/country-resource-list/data.json?resource={}&v4
 # Windscribe 2.24 refuses route lists past this size.
 ROUTE_CAPACITY = 4096
 MAX_HOSTNAMES = 50
-# Tailscale's address ranges. With Tailscale installed they always stay outside
-# the tunnel, or the Windscribe firewall drops tailnet traffic.
+# Tailscale's address ranges. While tailscaled is enabled they stay outside the
+# tunnel, or the Windscribe firewall drops tailnet traffic. bin/setup routes
+# them to Tailscale's table, or nowhere, so they never leave by the router.
 TAILSCALE_RANGES = ['100.64.0.0/10', 'fd7a:115c:a1e0::/48']
 
 
@@ -65,12 +67,13 @@ def is_network(value):
         return False
 
 
-def merge_routes(current, fresh, previous, always=()):
+def merge_routes(current, fresh, previous, always=(), previous_always=()):
     """Country ranges first, then the ranges in `always`, then whatever the
     user added: hostnames, and IP ranges that were not part of the last
-    country list we wrote. Without a record of that list, every IP range is
-    assumed to be ours."""
+    country list or `always` set we wrote. Without a record of that list,
+    every IP range is assumed to be ours."""
     managed = set(previous) if previous is not None else {r for r in current if is_network(r)}
+    managed |= set(previous_always)
     always = [r for r in always if r not in fresh]
     keep = [r for r in current if r not in managed and r not in fresh and r not in always]
     for entry in keep:
@@ -128,20 +131,44 @@ def fetch(country):
     return json.loads(data)
 
 
+def tailscale_enabled():
+    if not shutil.which('tailscale'):
+        return False
+    return subprocess.run(['systemctl', 'is-enabled', '--quiet', 'tailscaled'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def drop_tailscale():
+    """Take Tailscale's ranges out of the route list (bin/setup --uninstall)."""
+    with LOCK.open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        original = CONFIG.read_text()
+        updated = write_routes(original, [r for r in read_routes(original) if r not in TAILSCALE_RANGES])
+        if updated != original:
+            atomic_write(CONFIG.with_name(CONFIG.name + '.bak'), original)
+            atomic_write(CONFIG, updated)
+        state = load_state()
+        if state.get('always'):
+            state['always'] = []
+            atomic_write(STATE, json.dumps(state))
+        return 'Tailscale ranges %s' % ('removed' if updated != original else 'were not in the list')
+
+
 def refresh(country, dry_run=False):
     fresh = validated_ranges(fetch(country))
     with LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         original = CONFIG.read_text()
-        always = TAILSCALE_RANGES if shutil.which('tailscale') else ()
-        routes = merge_routes(read_routes(original), fresh, load_state().get('ranges'), always)
+        state = load_state()
+        always = TAILSCALE_RANGES if tailscale_enabled() else []
+        routes = merge_routes(read_routes(original), fresh, state.get('ranges'), always, state.get('always', ()))
         updated = write_routes(original, routes)
         if dry_run:
             return '%s: %d ranges would be written (dry run)' % (country, len(fresh))
         if updated != original:
             atomic_write(CONFIG.with_name(CONFIG.name + '.bak'), original)
             atomic_write(CONFIG, updated)
-        atomic_write(STATE, json.dumps({'country': country, 'ranges': fresh,
+        atomic_write(STATE, json.dumps({'country': country, 'ranges': fresh, 'always': always,
                                         'updated': datetime.now(timezone.utc).isoformat(timespec='seconds')}))
         return '%s: %d ranges %s' % (country, len(fresh), 'updated' if updated != original else 'unchanged')
 
@@ -150,12 +177,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('country', nargs='?', default=os.environ.get('WINDSCRIBE_BYPASS_COUNTRY', 'IR'))
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--drop-tailscale', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     country = args.country.upper()
     if not re.fullmatch(r'[A-Z]{2}', country):
         parser.error('country must be a two-letter ISO code, like IR')
     try:
-        print(refresh(country, args.dry_run))
+        print(drop_tailscale() if args.drop_tailscale else refresh(country, args.dry_run))
     except Exception as error:  # one line for the panel and the journal
         print('windscribe-split-refresh: %s' % error, file=sys.stderr)
         return 1

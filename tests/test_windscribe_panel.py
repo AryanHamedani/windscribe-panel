@@ -287,6 +287,9 @@ class Refresher(unittest.TestCase):
         # Already in the list as a user entry: still only once.
         merged = refresher.merge_routes(['5.22.0.0/17', *ts], ['5.22.0.0/17'], ['5.22.0.0/17'], ts)
         self.assertEqual(merged, ['5.22.0.0/17', *ts])
+        # Tailscale gone: ranges we wrote last time are ours, so they are removed.
+        merged = refresher.merge_routes(['5.22.0.0/17', *ts, 'snapp.ir'], ['5.22.0.0/17'], ['5.22.0.0/17'], [], ts)
+        self.assertEqual(merged, ['5.22.0.0/17', 'snapp.ir'])
 
     def test_legacy_state_is_read(self):
         # State written by 1.1 under the old folder name still marks which ranges are ours.
@@ -311,16 +314,20 @@ class Refresher(unittest.TestCase):
             path.write_text(CONFIG)
             with mock.patch.multiple(refresher, CONFIG=path, STATE=state, LOCK=Path(tmp) / 'lock'), \
                     mock.patch.object(refresher, 'fetch', return_value=self.payload(['2.144.0.0/14', '37.32.0.0/16'])), \
-                    mock.patch.object(refresher.shutil, 'which', return_value=None):
+                    mock.patch.object(refresher, 'tailscale_enabled', return_value=False) as enabled:
                 self.assertIn('updated', refresher.refresh('IR'))
                 self.assertIn('unchanged', refresher.refresh('IR'))
                 self.assertEqual(refresher.read_routes(path.read_text()), ['2.144.0.0/14', '37.32.0.0/16', 'snapp.ir'])
-                # Tailscale installed: its ranges are added once and stay on the next refresh.
-                refresher.shutil.which.return_value = '/usr/bin/tailscale'
+                # tailscaled enabled: its ranges are added once and stay on the next refresh.
+                enabled.return_value = True
                 refresher.refresh('IR')
                 self.assertIn('unchanged', refresher.refresh('IR'))
-            self.assertEqual(refresher.read_routes(path.read_text()),
-                             ['2.144.0.0/14', '37.32.0.0/16', *refresher.TAILSCALE_RANGES, 'snapp.ir'])
+                self.assertEqual(refresher.read_routes(path.read_text()),
+                                 ['2.144.0.0/14', '37.32.0.0/16', *refresher.TAILSCALE_RANGES, 'snapp.ir'])
+                # --drop-tailscale (setup --uninstall) takes them out without a fetch.
+                self.assertIn('removed', refresher.drop_tailscale())
+                self.assertEqual(refresher.read_routes(path.read_text()), ['2.144.0.0/14', '37.32.0.0/16', 'snapp.ir'])
+                self.assertEqual(json.loads(state.read_text())['always'], [])
             self.assertEqual(json.loads(state.read_text())['country'], 'IR')
             self.assertTrue((Path(tmp) / 'windscribe_cli.conf.bak').exists())
 

@@ -15,11 +15,24 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 NAME=windscribe-split-refresh
-# Tailscale's routing table (52) and ranges. The rule sits before Windscribe's
-# (5208/5209) so tailnet traffic goes to tailscale0, not the tunnel or the router.
+# Tailscale's ranges go to its routing table (52) ahead of Windscribe's rules
+# (5208/5209), then nowhere: an address that is not a live peer, or any of them
+# while tailscaled is stopped, hits "unreachable" instead of leaving by the router.
 TS_DROPIN=/etc/systemd/system/tailscaled.service.d/50-windscribe-panel.conf
-TS_RULE4="to 100.64.0.0/10 lookup 52 priority 5200"
-TS_RULE6="to fd7a:115c:a1e0::/48 lookup 52 priority 5200"
+TS_RULES=(
+  "to 100.64.0.0/10 lookup 52 priority 5200"
+  "to 100.64.0.0/10 unreachable priority 5201"
+  "-6 to fd7a:115c:a1e0::/48 lookup 52 priority 5200"
+  "-6 to fd7a:115c:a1e0::/48 unreachable priority 5201"
+)
+# "ip [-6] rule add|del|show RULE"; the family flag has to come before "rule",
+# and show only filters on the address and priority, not the action.
+ip_rule() {
+  local verb=$1 r=$2 fam=""
+  [[ $r == -6* ]] && { fam=-6; r=${r#-6 }; }
+  [[ $verb == show ]] && { r=${r/lookup 52 /}; r=${r/unreachable /}; }
+  echo "ip $fam rule $verb $r"
+}
 CONFIG="$HOME/.config/Windscribe/windscribe_cli.conf"
 
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -112,11 +125,11 @@ if [[ ${uninstall:-0} == 1 ]]; then
   rm -f "$UNITS/$NAME.service" "$UNITS/$NAME.timer"
   systemctl --user daemon-reload
   if [[ -e $TS_DROPIN ]]; then
-    step "Removing the Tailscale routing rule"
+    step "Removing the Tailscale routing rules and route-list entries"
+    python3 "$HERE/bin/windscribe-split-refresh" --drop-tailscale || true
     sudo rm -f "$TS_DROPIN"
     sudo systemctl daemon-reload
-    sudo ip rule del $TS_RULE4 2>/dev/null || true
-    sudo ip -6 rule del $TS_RULE6 2>/dev/null || true
+    for r in "${TS_RULES[@]}"; do sudo $(ip_rule del "$r") 2>/dev/null || true; done
   fi
   note "Done. Your Windscribe settings and route list were not changed."
   exit 0
@@ -159,23 +172,22 @@ step "Turning split tunneling on, in Exclude mode"
 python3 "$HERE/bin/windscribe-panel" set SplitTunnelingMode Exclude >/dev/null
 python3 "$HERE/bin/windscribe-panel" set SplitTunnelingEnabled true >/dev/null
 
-if command -v tailscale >/dev/null; then
+if command -v tailscale >/dev/null && systemctl is-enabled --quiet tailscaled 2>/dev/null; then
   # The refresh below keeps Tailscale's ranges out of the tunnel, which opens
-  # the Windscribe firewall to them; this rule routes them to tailscale0.
+  # the Windscribe firewall to them; these rules send them to tailscale0 or
+  # nowhere. They stay when tailscaled stops, so the ranges never fail open.
   step "Letting Tailscale work while Windscribe and its firewall are on"
-  sudo install -D -m 644 /dev/stdin "$TS_DROPIN" <<UNIT
-# Added by windscribe-panel (bin/setup): route Tailscale's ranges to its own
-# table ahead of Windscribe's rules. "-" ignores "already there" or "not there".
-[Service]
-ExecStartPost=-ip rule add $TS_RULE4
-ExecStartPost=-ip -6 rule add $TS_RULE6
-ExecStopPost=-ip rule del $TS_RULE4
-ExecStopPost=-ip -6 rule del $TS_RULE6
-UNIT
+  {
+    echo '# Added by windscribe-panel (bin/setup). See its README, "Tailscale".'
+    echo '# "-": a rule that is already there is not an error.'
+    echo '[Service]'
+    for r in "${TS_RULES[@]}"; do echo "ExecStartPost=-$(ip_rule add "$r")"; done
+  } | sudo install -D -m 644 /dev/stdin "$TS_DROPIN"
   sudo systemctl daemon-reload
   # Apply now as well, without restarting tailscaled.
-  ip rule show | grep -qF "${TS_RULE4% priority*}" || sudo ip rule add $TS_RULE4
-  ip -6 rule show | grep -qF "${TS_RULE6% priority*}" || sudo ip -6 rule add $TS_RULE6
+  for r in "${TS_RULES[@]}"; do
+    $(ip_rule show "$r") | grep -q . || sudo $(ip_rule add "$r")
+  done
 fi
 
 step "Fetching $country's network ranges"

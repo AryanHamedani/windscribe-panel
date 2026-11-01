@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.1 (2026-11-02)
+
+- Security: the Tailscale ranges now fail closed. A non-peer address in
+  `100.64.0.0/10`, or any of the range while tailscaled is stopped, hit
+  Windscribe's bypass route and left by the router outside the VPN; an
+  `unreachable` rule (priority 5201) now catches it, and the rules stay when
+  tailscaled stops.
+- The ranges are kept only while tailscaled is enabled (not just installed),
+  are recorded in the state file so a later refresh removes them, and
+  `bin/setup --uninstall` takes them out of the route list.
+
 ## 2.1.0 (2026-11-02)
 
 - **Tailscale works beside Windscribe and its firewall.** With `tailscale`

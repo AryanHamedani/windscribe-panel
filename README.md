@@ -166,16 +166,20 @@ bypassed or not. If a bypassed site resolves to `0.0.0.0`, allow it in your
 With Windscribe's firewall on, tailnet traffic is dropped: it is neither the
 tunnel nor the LAN. Both VPNs also use `100.64.0.0/10`, and Windscribe's
 routing rules come first, so even a bypassed tailnet address goes to your
-router instead of `tailscale0`. When `tailscale` is installed:
+router instead of `tailscale0`. While `tailscaled` is enabled:
 
-- `windscribe-split-refresh` always keeps `100.64.0.0/10` and
-  `fd7a:115c:a1e0::/48` in the route list, which opens the firewall to them;
+- `windscribe-split-refresh` keeps `100.64.0.0/10` and `fd7a:115c:a1e0::/48`
+  in the route list, which opens the firewall to them. It records them in its
+  state, so they are removed again once tailscaled is no longer enabled;
 - `bin/setup` adds `/etc/systemd/system/tailscaled.service.d/50-windscribe-panel.conf`,
-  which adds `ip rule to 100.64.0.0/10 lookup 52 priority 5200` (and the IPv6
-  one) whenever tailscaled starts, ahead of Windscribe's rules, and removes it
-  when tailscaled stops.
+  which adds two rules (IPv4 and IPv6) whenever tailscaled starts, ahead of
+  Windscribe's: `lookup 52` at priority 5200 sends live peers to `tailscale0`,
+  and `unreachable` at 5201 catches the rest of the range. The rules stay when
+  tailscaled stops, so the ranges fail closed: they never leave by the router,
+  outside the VPN, where your ISP's carrier-grade NAT also uses `100.64.0.0/10`.
 
 Installed Tailscale after Windscribe Panel? Run `bin/setup` again.
+`bin/setup --uninstall` removes the rules, the drop-in and the two ranges.
 MagicDNS names don't resolve while Windscribe is connected (it blocks other
 DNS servers to prevent leaks); use the `100.x` addresses.
 
