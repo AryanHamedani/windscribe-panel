@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.0 (2026-11-02)
+
+- **Tailscale works beside Windscribe and its firewall.** With `tailscale`
+  installed, the split-tunnel refresh always keeps `100.64.0.0/10` and
+  `fd7a:115c:a1e0::/48` in the route list (also on a fresh machine with no
+  saved state), and `bin/setup` adds a `tailscaled.service` drop-in that
+  routes those ranges to Tailscale's table ahead of Windscribe's rules.
+  `bin/setup --uninstall` takes the drop-in and the rule back out.
+
 ## 2.0.1 (2026-10-30)
 
 - Security: the windscribe-cli lock no longer falls back to a world-writable

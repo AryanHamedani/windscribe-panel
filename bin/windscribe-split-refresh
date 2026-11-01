@@ -18,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 import urllib.request
@@ -31,6 +32,9 @@ URL = 'https://stat.ripe.net/data/country-resource-list/data.json?resource={}&v4
 # Windscribe 2.24 refuses route lists past this size.
 ROUTE_CAPACITY = 4096
 MAX_HOSTNAMES = 50
+# Tailscale's address ranges. With Tailscale installed they always stay outside
+# the tunnel, or the Windscribe firewall drops tailnet traffic.
+TAILSCALE_RANGES = ['100.64.0.0/10', 'fd7a:115c:a1e0::/48']
 
 
 def validated_ranges(payload):
@@ -61,18 +65,20 @@ def is_network(value):
         return False
 
 
-def merge_routes(current, fresh, previous):
-    """Country ranges first, then whatever the user added: hostnames, and IP
-    ranges that were not part of the last country list we wrote. Without a
-    record of that list, every IP range is assumed to be ours."""
+def merge_routes(current, fresh, previous, always=()):
+    """Country ranges first, then the ranges in `always`, then whatever the
+    user added: hostnames, and IP ranges that were not part of the last
+    country list we wrote. Without a record of that list, every IP range is
+    assumed to be ours."""
     managed = set(previous) if previous is not None else {r for r in current if is_network(r)}
-    keep = [r for r in current if r not in managed and r not in fresh]
+    always = [r for r in always if r not in fresh]
+    keep = [r for r in current if r not in managed and r not in fresh and r not in always]
     for entry in keep:
         if not is_network(entry) and not re.fullmatch(r'[A-Za-z0-9.-]+', entry):
             raise ValueError('Unsupported entry in the route list: ' + entry)
     if sum(not is_network(r) for r in keep) > MAX_HOSTNAMES:
         raise ValueError('More than %d hostname exceptions' % MAX_HOSTNAMES)
-    routes = fresh + keep
+    routes = fresh + always + keep
     if len(routes) > ROUTE_CAPACITY:
         raise ValueError("%d routes exceed Windscribe's limit of %d" % (len(routes), ROUTE_CAPACITY))
     return routes
@@ -127,7 +133,8 @@ def refresh(country, dry_run=False):
     with LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         original = CONFIG.read_text()
-        routes = merge_routes(read_routes(original), fresh, load_state().get('ranges'))
+        always = TAILSCALE_RANGES if shutil.which('tailscale') else ()
+        routes = merge_routes(read_routes(original), fresh, load_state().get('ranges'), always)
         updated = write_routes(original, routes)
         if dry_run:
             return '%s: %d ranges would be written (dry run)' % (country, len(fresh))

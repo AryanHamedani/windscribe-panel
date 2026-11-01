@@ -279,6 +279,15 @@ class Refresher(unittest.TestCase):
         # No record of the last list: every range is treated as ours.
         self.assertEqual(refresher.merge_routes(current, ['5.22.0.0/17'], None), ['5.22.0.0/17', 'snapp.ir'])
 
+    def test_merge_always_keeps_tailscale(self):
+        ts = refresher.TAILSCALE_RANGES
+        # Fresh machine, no state: the ranges survive and come once, after the country list.
+        merged = refresher.merge_routes(['100.64.0.0/10', 'snapp.ir'], ['5.22.0.0/17'], None, ts)
+        self.assertEqual(merged, ['5.22.0.0/17', *ts, 'snapp.ir'])
+        # Already in the list as a user entry: still only once.
+        merged = refresher.merge_routes(['5.22.0.0/17', *ts], ['5.22.0.0/17'], ['5.22.0.0/17'], ts)
+        self.assertEqual(merged, ['5.22.0.0/17', *ts])
+
     def test_legacy_state_is_read(self):
         # State written by 1.1 under the old folder name still marks which ranges are ours.
         with tempfile.TemporaryDirectory() as tmp:
@@ -301,10 +310,17 @@ class Refresher(unittest.TestCase):
             path, state = Path(tmp) / 'windscribe_cli.conf', Path(tmp) / 'state.json'
             path.write_text(CONFIG)
             with mock.patch.multiple(refresher, CONFIG=path, STATE=state, LOCK=Path(tmp) / 'lock'), \
-                    mock.patch.object(refresher, 'fetch', return_value=self.payload(['2.144.0.0/14', '37.32.0.0/16'])):
+                    mock.patch.object(refresher, 'fetch', return_value=self.payload(['2.144.0.0/14', '37.32.0.0/16'])), \
+                    mock.patch.object(refresher.shutil, 'which', return_value=None):
                 self.assertIn('updated', refresher.refresh('IR'))
                 self.assertIn('unchanged', refresher.refresh('IR'))
-            self.assertEqual(refresher.read_routes(path.read_text()), ['2.144.0.0/14', '37.32.0.0/16', 'snapp.ir'])
+                self.assertEqual(refresher.read_routes(path.read_text()), ['2.144.0.0/14', '37.32.0.0/16', 'snapp.ir'])
+                # Tailscale installed: its ranges are added once and stay on the next refresh.
+                refresher.shutil.which.return_value = '/usr/bin/tailscale'
+                refresher.refresh('IR')
+                self.assertIn('unchanged', refresher.refresh('IR'))
+            self.assertEqual(refresher.read_routes(path.read_text()),
+                             ['2.144.0.0/14', '37.32.0.0/16', *refresher.TAILSCALE_RANGES, 'snapp.ir'])
             self.assertEqual(json.loads(state.read_text())['country'], 'IR')
             self.assertTrue((Path(tmp) / 'windscribe_cli.conf.bak').exists())
 

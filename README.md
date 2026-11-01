@@ -62,7 +62,9 @@ Run the same command to update. It:
 3. starts Windscribe's services and signs you in if needed,
 4. turns split tunneling on, in Exclude mode, and fetches Iran's ranges
    (`… | bash -s -- DE` for another country),
-5. installs `windscribe-split-refresh.timer` to refresh them weekly.
+5. installs `windscribe-split-refresh.timer` to refresh them weekly,
+6. if Tailscale is installed, keeps it working beside Windscribe and its
+   firewall (see [Tailscale](#tailscale)).
 
 It asks for your password for the package manager and your Windscribe
 sign-in, nothing else. `--waybar` picks the Waybar front end even on Omarchy.
@@ -159,6 +161,24 @@ journalctl --user -u windscribe-split-refresh     # what the timer did
 bypassed or not. If a bypassed site resolves to `0.0.0.0`, allow it in your
 [R.O.B.E.R.T. rules](https://windscribe.com/myaccount#robertrules).
 
+### Tailscale
+
+With Windscribe's firewall on, tailnet traffic is dropped: it is neither the
+tunnel nor the LAN. Both VPNs also use `100.64.0.0/10`, and Windscribe's
+routing rules come first, so even a bypassed tailnet address goes to your
+router instead of `tailscale0`. When `tailscale` is installed:
+
+- `windscribe-split-refresh` always keeps `100.64.0.0/10` and
+  `fd7a:115c:a1e0::/48` in the route list, which opens the firewall to them;
+- `bin/setup` adds `/etc/systemd/system/tailscaled.service.d/50-windscribe-panel.conf`,
+  which adds `ip rule to 100.64.0.0/10 lookup 52 priority 5200` (and the IPv6
+  one) whenever tailscaled starts, ahead of Windscribe's rules, and removes it
+  when tailscaled stops.
+
+Installed Tailscale after Windscribe Panel? Run `bin/setup` again.
+MagicDNS names don't resolve while Windscribe is connected (it blocks other
+DNS servers to prevent leaks); use the `100.x` addresses.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -174,7 +194,7 @@ bypassed or not. If a bypassed site resolves to `0.0.0.0`, allow it in your
 ## Uninstall
 
 ```bash
-~/.local/share/windscribe-panel/bin/setup --uninstall   # or the Omarchy plugin folder
+~/.local/share/windscribe-panel/bin/setup --uninstall   # or the Omarchy plugin folder; also drops the Tailscale rule
 rm -rf ~/.local/share/windscribe-panel ~/.local/bin/windscribe-panel ~/.local/bin/windscribe-split-refresh \
        ~/.config/waybar/windscribe-panel.{jsonc,css}
 # Omarchy: omarchy plugin remove io.github.aryanhamedani.windscribe --yes

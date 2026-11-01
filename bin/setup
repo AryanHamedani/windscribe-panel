@@ -15,6 +15,11 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 NAME=windscribe-split-refresh
+# Tailscale's routing table (52) and ranges. The rule sits before Windscribe's
+# (5208/5209) so tailnet traffic goes to tailscale0, not the tunnel or the router.
+TS_DROPIN=/etc/systemd/system/tailscaled.service.d/50-windscribe-panel.conf
+TS_RULE4="to 100.64.0.0/10 lookup 52 priority 5200"
+TS_RULE6="to fd7a:115c:a1e0::/48 lookup 52 priority 5200"
 CONFIG="$HOME/.config/Windscribe/windscribe_cli.conf"
 
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -106,6 +111,13 @@ if [[ ${uninstall:-0} == 1 ]]; then
   systemctl --user disable --now "$NAME.timer" 2>/dev/null || true
   rm -f "$UNITS/$NAME.service" "$UNITS/$NAME.timer"
   systemctl --user daemon-reload
+  if [[ -e $TS_DROPIN ]]; then
+    step "Removing the Tailscale routing rule"
+    sudo rm -f "$TS_DROPIN"
+    sudo systemctl daemon-reload
+    sudo ip rule del $TS_RULE4 2>/dev/null || true
+    sudo ip -6 rule del $TS_RULE6 2>/dev/null || true
+  fi
   note "Done. Your Windscribe settings and route list were not changed."
   exit 0
 fi
@@ -146,6 +158,25 @@ fi
 step "Turning split tunneling on, in Exclude mode"
 python3 "$HERE/bin/windscribe-panel" set SplitTunnelingMode Exclude >/dev/null
 python3 "$HERE/bin/windscribe-panel" set SplitTunnelingEnabled true >/dev/null
+
+if command -v tailscale >/dev/null; then
+  # The refresh below keeps Tailscale's ranges out of the tunnel, which opens
+  # the Windscribe firewall to them; this rule routes them to tailscale0.
+  step "Letting Tailscale work while Windscribe and its firewall are on"
+  sudo install -D -m 644 /dev/stdin "$TS_DROPIN" <<UNIT
+# Added by windscribe-panel (bin/setup): route Tailscale's ranges to its own
+# table ahead of Windscribe's rules. "-" ignores "already there" or "not there".
+[Service]
+ExecStartPost=-ip rule add $TS_RULE4
+ExecStartPost=-ip -6 rule add $TS_RULE6
+ExecStopPost=-ip rule del $TS_RULE4
+ExecStopPost=-ip -6 rule del $TS_RULE6
+UNIT
+  sudo systemctl daemon-reload
+  # Apply now as well, without restarting tailscaled.
+  ip rule show | grep -qF "${TS_RULE4% priority*}" || sudo ip rule add $TS_RULE4
+  ip -6 rule show | grep -qF "${TS_RULE6% priority*}" || sudo ip -6 rule add $TS_RULE6
+fi
 
 step "Fetching $country's network ranges"
 python3 "$HERE/bin/windscribe-split-refresh" "$country"
