@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.3 (2026-11-05)
+
+- `bin/setup` runs its `ip rule` commands as argument arrays instead of
+  word-split command strings; shellcheck passes again, so CI is green.
+
 ## 2.1.2 (2026-11-05)
 
 - Security: a refresh keeps Tailscale's ranges in the route list only while

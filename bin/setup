@@ -33,6 +33,13 @@ ip_rule() {
   [[ $verb == show ]] && { r=${r/lookup 52 /}; r=${r/unreachable /}; }
   echo "ip $fam rule $verb $r"
 }
+# Run one: "run_ip [sudo] VERB RULE". The rules are fixed strings, split on spaces.
+run_ip() {
+  local -a pre=() cmd
+  [[ $1 == sudo ]] && { pre=(sudo); shift; }
+  read -ra cmd <<<"$(ip_rule "$1" "$2")"
+  "${pre[@]}" "${cmd[@]}"
+}
 CONFIG="$HOME/.config/Windscribe/windscribe_cli.conf"
 
 step() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -129,7 +136,7 @@ if [[ ${uninstall:-0} == 1 ]]; then
     sudo rm -f "$TS_DROPIN"
     sudo rmdir --ignore-fail-on-non-empty "$(dirname "$TS_DROPIN")"
     sudo systemctl daemon-reload
-    for r in "${TS_RULES[@]}"; do sudo $(ip_rule del "$r") 2>/dev/null || true; done
+    for r in "${TS_RULES[@]}"; do run_ip sudo del "$r" 2>/dev/null || true; done
   fi
   note "Done. Your Windscribe settings and route list were not changed."
   exit 0
@@ -186,7 +193,7 @@ if command -v tailscale >/dev/null && systemctl is-enabled --quiet tailscaled 2>
   sudo systemctl daemon-reload
   # Apply now as well, without restarting tailscaled.
   for r in "${TS_RULES[@]}"; do
-    $(ip_rule show "$r") | grep -q . || sudo $(ip_rule add "$r")
+    run_ip show "$r" | grep -q . || run_ip sudo add "$r"
   done
 fi
 
