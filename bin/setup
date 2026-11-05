@@ -106,11 +106,9 @@ install_cli() {
   trap 'rm -rf "$tmp"' RETURN
   note "Downloading $name"
   curl -fL --progress-bar -o "$tmp/$name" "$url"
-  if [[ $digest == sha256:* ]]; then
-    echo "${digest#sha256:}  $tmp/$name" | sha256sum -c --quiet - || die "checksum mismatch for $name"
-  else
-    note "GitHub has no checksum for this upload; installing on HTTPS trust alone"
-  fi
+  # Fail closed: nothing reaches sudo without a checksum to match.
+  [[ $digest == sha256:* ]] || die "GitHub gives no sha256 for $name; install windscribe-cli from https://windscribe.com/download, then run this again"
+  echo "${digest#sha256:}  $tmp/$name" | sha256sum -c --quiet - || die "checksum mismatch for $name"
   case $pm in
   pacman) sudo pacman -U --needed --noconfirm "$tmp/$name" ;;
   apt) apt_update && sudo apt-get install -y "$tmp/$name" ;;
@@ -124,10 +122,12 @@ if [[ ${uninstall:-0} == 1 ]]; then
   systemctl --user disable --now "$NAME.timer" 2>/dev/null || true
   rm -f "$UNITS/$NAME.service" "$UNITS/$NAME.timer"
   systemctl --user daemon-reload
+  # A refresh may have listed the ranges even where the drop-in is gone.
+  python3 "$HERE/bin/windscribe-split-refresh" --drop-tailscale || true
   if [[ -e $TS_DROPIN ]]; then
-    step "Removing the Tailscale routing rules and route-list entries"
-    python3 "$HERE/bin/windscribe-split-refresh" --drop-tailscale || true
+    step "Removing the Tailscale routing rules"
     sudo rm -f "$TS_DROPIN"
+    sudo rmdir --ignore-fail-on-non-empty "$(dirname "$TS_DROPIN")"
     sudo systemctl daemon-reload
     for r in "${TS_RULES[@]}"; do sudo $(ip_rule del "$r") 2>/dev/null || true; done
   fi
@@ -206,7 +206,7 @@ ConditionPathExists=$CONFIG
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 $HERE/bin/windscribe-split-refresh $country
+ExecStart=/usr/bin/python3 "$HERE/bin/windscribe-split-refresh" $country
 TimeoutStartSec=120
 UMask=0077
 UNIT

@@ -328,8 +328,29 @@ class Refresher(unittest.TestCase):
                 self.assertIn('removed', refresher.drop_tailscale())
                 self.assertEqual(refresher.read_routes(path.read_text()), ['2.144.0.0/14', '37.32.0.0/16', 'snapp.ir'])
                 self.assertEqual(json.loads(state.read_text())['always'], [])
+                # A range the user listed by hand is not ours to drop.
+                path.write_text(refresher.write_routes(path.read_text(), ['100.64.0.0/10', 'snapp.ir']))
+                refresher.drop_tailscale()
+                self.assertIn('100.64.0.0/10', refresher.read_routes(path.read_text()))
             self.assertEqual(json.loads(state.read_text())['country'], 'IR')
             self.assertTrue((Path(tmp) / 'windscribe_cli.conf.bak').exists())
+
+    def test_tailscale_ranges_need_the_fail_closed_drop_in(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(refresher.shutil, 'which', return_value='/usr/bin/tailscale'), \
+                mock.patch.object(refresher.subprocess, 'run', return_value=mock.Mock(returncode=0)):
+            with mock.patch.object(refresher, 'TS_DROPIN', Path(tmp) / 'missing.conf'):
+                self.assertFalse(refresher.tailscale_enabled())
+            dropin = Path(tmp) / 'present.conf'
+            dropin.write_text('')
+            with mock.patch.object(refresher, 'TS_DROPIN', dropin):
+                self.assertTrue(refresher.tailscale_enabled())
+
+    def test_refresh_ranges_takes_only_a_country_code(self):
+        for bad in (['refresh-ranges', '--drop-tailscale'], ['refresh-ranges', 'IRN']):
+            with mock.patch.object(panel.subprocess, 'run') as run, self.assertRaises(ValueError, msg=bad):
+                panel.dispatch(bad)
+            run.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -159,11 +159,21 @@ def cached_json(path, ttl, fetch):
             return json.loads(path.read_text())
         except (OSError, ValueError):
             return None
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(data))
-    tmp.replace(path)
+    save_json(path, data)
     return data
+
+
+def save_json(path, data):
+    """Atomic, and safe when catalog and pings refresh the same file at once."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=STATE_DIR)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(data))
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 def fetch_serverlist():
@@ -212,8 +222,7 @@ def pings(force=False):
     if not targets:
         raise RuntimeError('Could not load the Windscribe server list to ping.')
     result = measure_pings(targets, tunnel)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result))
+    save_json(path, result)
     return result
 
 
@@ -380,8 +389,8 @@ def dispatch(args):
     if len(args) == 3 and args[0] == 'domain':
         mutate(lambda p, r: {'SplitTunnelingRoutes': ', '.join(change_domains(r, args[1], args[2]))})
         return {'message': ('Added ' if args[1] == 'add' else 'Removed ') + hostname(args[2]) + '.'}
-    if args and args[0] == 'refresh-ranges' and len(args) <= 2:
-        proc = subprocess.run([sys.executable, str(REFRESHER), *args[1:]], capture_output=True, text=True, timeout=90)
+    if args and args[0] == 'refresh-ranges' and len(args) <= 2 and all(re.fullmatch('[A-Za-z]{2}', a) for a in args[1:]):
+        proc = subprocess.run([sys.executable, str(REFRESHER), *(a.upper() for a in args[1:])], capture_output=True, text=True, timeout=90)
         if proc.returncode:
             raise RuntimeError((proc.stderr or proc.stdout).strip()[-400:])
         return {'message': proc.stdout.strip()}

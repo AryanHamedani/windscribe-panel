@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.2 (2026-11-05)
+
+- Security: a refresh keeps Tailscale's ranges in the route list only while
+  `bin/setup`'s drop-in is in place. Enabling Tailscale after setup no longer
+  opens the ranges without the `unreachable` rule that keeps them fail closed.
+- Security: `bin/setup` refuses to install a `windscribe-cli` package that
+  GitHub gives no sha256 for, instead of installing it on HTTPS trust alone.
+- `setup --uninstall` always takes out the Tailscale ranges a refresh added,
+  and only those (a range you listed yourself stays), and removes the empty
+  drop-in folder.
+- The cached server list and pings are written atomically, so opening the
+  panel no longer fails when two refreshes race.
+- `refresh-ranges` accepts only a two-letter country code.
+- README: install from the Omarchy plugin marketplace; uninstall on Omarchy
+  runs `setup --uninstall` first. The Omarchy screenshot is the root
+  `preview.png`.
+
 ## 2.1.1 (2026-11-02)
 
 - Security: the Tailscale ranges now fail closed. A non-peer address in

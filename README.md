@@ -41,12 +41,21 @@ It is one program, `windscribe-panel`, with two front ends on top:
 The Linux side needs systemd and one of pacman, apt, dnf or zypper; Windscribe
 publishes its CLI for Arch, Debian/Ubuntu, Fedora and openSUSE.
 
-![Omarchy: overview, connection settings, split tunneling](docs/omarchy.png)
+![Omarchy: overview, connection settings, split tunneling](preview.png)
 
 ## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AryanHamedani/windscribe-panel/main/install.sh | bash
+```
+
+On Omarchy you can instead add it from the
+[plugin marketplace](https://plugins.omarchy.org), then run its setup once to
+install `windscribe-cli`, start its services and turn split tunneling on:
+
+```bash
+omarchy plugin add https://github.com/AryanHamedani/windscribe-panel --enable
+~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe/bin/setup
 ```
 
 Run the same command to update. It:
@@ -166,7 +175,8 @@ bypassed or not. If a bypassed site resolves to `0.0.0.0`, allow it in your
 With Windscribe's firewall on, tailnet traffic is dropped: it is neither the
 tunnel nor the LAN. Both VPNs also use `100.64.0.0/10`, and Windscribe's
 routing rules come first, so even a bypassed tailnet address goes to your
-router instead of `tailscale0`. While `tailscaled` is enabled:
+router instead of `tailscale0`. While `tailscaled` is enabled and `bin/setup`'s
+drop-in (below) is in place:
 
 - `windscribe-split-refresh` keeps `100.64.0.0/10` and `fd7a:115c:a1e0::/48`
   in the route list, which opens the firewall to them. It records them in its
@@ -198,11 +208,21 @@ DNS servers to prevent leaks); use the `100.x` addresses.
 ## Uninstall
 
 ```bash
-~/.local/share/windscribe-panel/bin/setup --uninstall   # or the Omarchy plugin folder; also drops the Tailscale rule
+# Waybar
+~/.local/share/windscribe-panel/bin/setup --uninstall
 rm -rf ~/.local/share/windscribe-panel ~/.local/bin/windscribe-panel ~/.local/bin/windscribe-split-refresh \
        ~/.config/waybar/windscribe-panel.{jsonc,css}
-# Omarchy: omarchy plugin remove io.github.aryanhamedani.windscribe --yes
+
+# Omarchy: run setup --uninstall first, while the plugin folder is still there
+~/.config/omarchy/plugins/io.github.aryanhamedani.windscribe/bin/setup --uninstall
+omarchy plugin remove io.github.aryanhamedani.windscribe --yes
+
+# Either: the panel's cached server list, pings and range state
+rm -rf ~/.local/state/windscribe-panel
 ```
+
+`setup --uninstall` removes the weekly timer, the Tailscale drop-in and its
+rules, and the Tailscale ranges a refresh added to the route list.
 
 Windscribe and its settings are left as they are; your package manager
 removes `windscribe-cli`.

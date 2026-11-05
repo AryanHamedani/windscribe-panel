@@ -37,6 +37,8 @@ MAX_HOSTNAMES = 50
 # tunnel, or the Windscribe firewall drops tailnet traffic. bin/setup routes
 # them to Tailscale's table, or nowhere, so they never leave by the router.
 TAILSCALE_RANGES = ['100.64.0.0/10', 'fd7a:115c:a1e0::/48']
+# bin/setup's drop-in adds the rules that keep those ranges fail closed.
+TS_DROPIN = Path('/etc/systemd/system/tailscaled.service.d/50-windscribe-panel.conf')
 
 
 def validated_ranges(payload):
@@ -132,7 +134,8 @@ def fetch(country):
 
 
 def tailscale_enabled():
-    if not shutil.which('tailscale'):
+    # Without the drop-in's unreachable rule, bypassing the ranges would fail open.
+    if not shutil.which('tailscale') or not TS_DROPIN.exists():
         return False
     return subprocess.run(['systemctl', 'is-enabled', '--quiet', 'tailscaled'],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -143,11 +146,13 @@ def drop_tailscale():
     with LOCK.open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         original = CONFIG.read_text()
-        updated = write_routes(original, [r for r in read_routes(original) if r not in TAILSCALE_RANGES])
+        state = load_state()
+        # Only what a refresh added; a range the user listed by hand stays.
+        ours = state.get('always', TAILSCALE_RANGES)
+        updated = write_routes(original, [r for r in read_routes(original) if r not in ours])
         if updated != original:
             atomic_write(CONFIG.with_name(CONFIG.name + '.bak'), original)
             atomic_write(CONFIG, updated)
-        state = load_state()
         if state.get('always'):
             state['always'] = []
             atomic_write(STATE, json.dumps(state))
